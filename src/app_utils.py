@@ -76,37 +76,29 @@ def process_ts_data(df, date_var='date'):
     # Convert 'date' column to datetime type
     df[date_var] = pd.to_datetime(df[date_var])
 
-    # Set 'date' as the index of the dataframe
-    df.set_index(date_var, inplace=True)
-
     # Summarize the dataframe
-    st.write(df.describe())
+    # st.write(df.describe(include='all'))
     data = json.loads(df.describe().to_json())
     # Now, let's write this data to a file
     with open('../data/processed/summary.json', 'w') as json_file:
         json.dump(data, json_file, indent=4)
 
-    # Summarize the dataframe
-    st.write(df.tail(14))
-    data = json.loads(df.tail(14).to_json())
+    # Set 'date' as the index of the dataframe
+    df.set_index(date_var, inplace=True)
+
+    use_rows=7
+    if len(df.columns)>10:
+        use_rows=2
+    # Write the start of dataframe
+    # st.write(df.head(use_rows))
+    data = json.loads(df.head(use_rows).to_json())
     # Now, let's write this data to a file
-    with open('../data/processed/last_2_weeks.json', 'w') as json_file:
+    with open('../data/processed/head.json', 'w') as json_file:
         json.dump(data, json_file, indent=4)
 
-
-
-
-
-
-# # Define all containers upfront to ensure app UI consistency
-# # container to upload files
-# upload_container = st.container()
-# # container to enter any datasource string
-# datasource_container = st.container()
-# # container to display infos stored to session state
-# # as it needs to be accessed from submodules
-# st.session_state["info_container"] = st.container()
-# # container for chat history
-# response_container = st.container()
-# # container for text box
-# text_container = st.container()
+    # Write the recent dataframe
+    # st.write(df.tail(use_rows))
+    data = json.loads(df.tail(use_rows).to_json())
+    # Now, let's write this data to a file
+    with open('../data/processed/tail.json', 'w') as json_file:
+        json.dump(data, json_file, indent=4)

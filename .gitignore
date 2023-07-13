@@ -8,6 +8,9 @@ __pycache__/
 # C extensions
 *.so
 
+# .csv files
+*.csv
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
@@ -28,4 +31,5 @@ celerybeat-schedule
 venv
 
 # mkdocs documentation
-/site
+/data/raw
+/data/processed
