@@ -9,12 +9,6 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-import app_utils
-
-from bardapi import Bard
-import openai
-
-
 from config import MODELS, KNOWLEDGE_BASES, K, FETCH_K, CHUNK_SIZE, CHUNK_OVERLAP, TEMPERATURE, MAX_TOKENS, DATE_VAR
 from app_utils import generate_responses, initialize_session_state, process_ts_data
 
@@ -43,13 +37,20 @@ if uploaded_file is not None:
     st.write(dataframe)
 
 # User prompt
-description = st.text_input("Please provide a brief description of the data file (e.g. This is market data for the S&P500)", "")
+brief_description = st.text_input("Please provide a brief description of the data file (e.g. This is market data for the S&P500)", "")
 
 # User prompt
-prompt = st.text_input("Enter your prompt", "")
+requested_prompt = st.text_input("(Optional) Enter your prompt", "")
 
 # Generate button
 generate_button = st.button("Generate Responses")
+
+# checkbox for each type of report
+field_summary = st.checkbox("Field Descriptions", value=False)
+data_summary = st.checkbox("Data Summary", value=False)
+recent_summary = st.checkbox("Recent Data Analysis", value=False)
+trend_summary = st.checkbox("Trend Summary", value=False)
+
     
 #don't have it appear until responses are generated
 clear_button = None
@@ -60,45 +61,54 @@ template = st.text_input(f"Enter prompt template ", "")
 knowledge_base = st.selectbox(f"Select Knowledge Base ", KNOWLEDGE_BASES)
 context = st.text_input(f"Enter context for Knowledge Base ", "")
 
-if generate_button :
+if generate_button and st.session_state['uploaded_file']:
+
+    #general context for prompts
+    general_context = "You are a data analyst with a strong business intuition. " 
+    if len(brief_description)>0:
+        general_context = general_context + "A user provided the following brief description of the data: "+ brief_description + "\n"
+
+    # Open the file in read mode into Python dictionary then back to a JSON string
+    with open('../data/processed/head.json', 'r') as json_file:
+        data = json.load(json_file)
+    json_head = json.dumps(data, indent=4)
+    prompt_context= general_context + "\n This is an example of the first set of rows \n"+json_head +"\n"+"Please decribe what the data fields may represent."
+    #if checked, try to produce a field summary
+    if field_summary:
+        field_summary_response = generate_responses(prompt_context, model, template, knowledge_base, context)
+        st.header(f"Field Summary")
+        st.write(field_summary_response)
+
+    # Open the file in read mode into Python dictionary then back to a JSON string
+    with open('../data/processed/summary.json', 'r') as json_file:
+        data = json.load(json_file)
+    json_summary = json.dumps(data, indent=4)
+    with open('../data/processed/tail.json', 'r') as json_file:
+        data = json.load(json_file)
+    json_recent = json.dumps(data, indent=4)
+    
+    if data_summary:
+        prompt_context = general_context + "Please summarize the data provided and consider this json string summarizing the data: \n"+ json_summary
+        data_summary_response = generate_responses(prompt_context, model, template, knowledge_base, context)
+        st.header(f"Data Summary")
+        st.write(data_summary_response)
+    if recent_summary:
+        prompt_context = general_context + "By comparing the following data summary with the recent data also provided, please provide analysis of the most recent data.\n Summary data:\n"+ json_summary+"\n Recent Data:\n"+json_recent
+        recent_summary_response = generate_responses(prompt_context, model, template, knowledge_base, context)
+        st.header(f"Recent Data Analysis")
+        st.write(recent_summary_response)
 
     prompt_context=""
-
-    if st.session_state['uploaded_file'] :
-        # Open the file in read mode
-        with open('../data/processed/head.json', 'r') as json_file:
-            data = json.load(json_file)
-        # Convert the Python dictionary back to a JSON string
-        head_string = json.dumps(data, indent=4)
-
-        # Open the file in read mode
-        with open('../data/processed/summary.json', 'r') as json_file:
-            data = json.load(json_file)
-        # Convert the Python dictionary back to a JSON string
-        json_string = json.dumps(data, indent=4)
-        prompt_context = prompt_context + "\nPlease consider the following json string summarizing the data in your response: \n"+ json_string 
-        
-        # Open the file in read mode
-        with open('../data/processed/tail.json', 'r') as json_file:
-            data = json.load(json_file)
-        # Convert the Python dictionary back to a JSON string
-        json_string2 = json.dumps(data, indent=4)
-        prompt_context = prompt_context+ "\nPlease consider the following json string containing the most recent data \n" + json_string2 
-
-    # Print the JSON string
-    prompt_requested = prompt + prompt_context + "\n" + prompt
-
-    print(f"Length of prompt: {len(prompt)}")
-
-    prompt_description = description + "\n This is an example of the first set of rows \n"+head_string +"\n"+"Please decribe what this data may represent."
-    description_response = generate_responses(prompt_description, model, template, knowledge_base, context)
-    requested_response = generate_responses(prompt_requested, model, template, knowledge_base, context)
-
-    st.session_state["generated_responses"] = True
-    st.header(f"Description of what this data may represent")
-    st.write(description_response)
-    st.header(prompt)
-    st.write(response)
+    if len(requested_prompt)>1:
+        print(f"Length of prompt: {len(requested_prompt)}")
+        # Print the JSON string
+        prompt_requested = requested_prompt + prompt_context + "\n" + requested_prompt
+        requested_response = generate_responses(prompt_requested, model, template, knowledge_base, context)
+        st.header(requested_prompt)
+        st.write(requested_response)
+    
+elif generate_button:
+    st.write("Please upload a file first")
 
 if st.session_state["generated_responses"] and not st.session_state["cleared_responses"]:
     clear_button = st.button("Clear Responses")

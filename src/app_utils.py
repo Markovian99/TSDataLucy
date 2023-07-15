@@ -9,8 +9,16 @@ from config import MODELS, KNOWLEDGE_BASES, K, FETCH_K, CHUNK_SIZE, CHUNK_OVERLA
 from bardapi import Bard
 import openai
 
+
 # make sure load_dotenv is run from main app file first
 openai.api_key = os.getenv('OPENAI_API_KEY')
+if os.getenv('OPENAI_API_BASE'):
+    openai.api_base = os.getenv('OPENAI_API_BASE')
+if os.getenv('OPENAI_API_TYPE'):
+    openai.api_type = os.getenv('OPENAI_API_TYPE')
+if os.getenv('OPENAI_API_VERSION'):
+    openai.api_version = os.getenv('OPENAI_API_VERSION')
+
 bard = Bard(token=os.getenv('BARD_API_KEY'))
 
 def initialize_session_state():
@@ -78,7 +86,7 @@ def process_ts_data(df, date_var='date'):
 
     # Summarize the dataframe
     # st.write(df.describe(include='all'))
-    data = json.loads(df.describe().to_json())
+    data = json.loads(df.describe(include='all').to_json())
     # Now, let's write this data to a file
     with open('../data/processed/summary.json', 'w') as json_file:
         json.dump(data, json_file, indent=4)
