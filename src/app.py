@@ -9,10 +9,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from config import MODELS, KNOWLEDGE_BASES, K, FETCH_K, CHUNK_SIZE, CHUNK_OVERLAP, TEMPERATURE, MAX_TOKENS, DATE_VAR
-from app_utils import generate_responses, initialize_session_state, process_ts_data
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR
+from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data
 
- 
 # # default session state variables
 initialize_session_state()
 
@@ -28,9 +27,8 @@ if uploaded_file is not None:
          f.write(uploaded_file.getbuffer())
 
     st.session_state["uploaded_file"] = uploaded_file.name
-
-    # Can be used wherever a "file-like" object is accepted:
     dataframe = pd.read_csv(uploaded_file)
+    st.session_state["categorical_features"]=["None"]+identify_categorical(dataframe)
 
     process_ts_data(dataframe, DATE_VAR)
 
@@ -45,11 +43,19 @@ requested_prompt = st.text_input("(Optional) Enter your prompt", "")
 # Generate button
 generate_button = st.button("Generate Responses")
 
-# checkbox for each type of report
-field_summary = st.checkbox("Field Descriptions", value=False)
-data_summary = st.checkbox("Data Summary", value=False)
-recent_summary = st.checkbox("Recent Data Analysis", value=False)
-trend_summary = st.checkbox("Trend Summary", value=False)
+col1, col2 = st.columns(2)
+with col1:
+    # checkbox for each type of report
+    field_summary = st.checkbox("Field Descriptions", value=True)
+    data_summary = st.checkbox("Data Summary", value=True)
+    recent_summary = st.checkbox("Recent Data Analysis", value=True)
+with col2:
+    # checkbox for each type of report
+    trend_summary = st.checkbox("Trend Summary", value=False)
+    compare_bygroup = st.checkbox("Compare by Group", value=False)
+
+if uploaded_file is not None:
+    by_var = st.selectbox(f"Select Group By Variable ", st.session_state["categorical_features"])
 
     
 #don't have it appear until responses are generated
@@ -57,9 +63,7 @@ clear_button = None
 
 
 model = st.selectbox(f"Select Model ", MODELS)
-template = st.text_input(f"Enter prompt template ", "")
-knowledge_base = st.selectbox(f"Select Knowledge Base ", KNOWLEDGE_BASES)
-context = st.text_input(f"Enter context for Knowledge Base ", "")
+template = st.text_input(f"Enter extra prompt details (added to end of all prompts)", "")
 
 if generate_button and st.session_state['uploaded_file']:
 
@@ -75,7 +79,7 @@ if generate_button and st.session_state['uploaded_file']:
     prompt_context= general_context + "\n This is an example of the first set of rows \n"+json_head +"\n"+"Please decribe what the data fields may represent."
     #if checked, try to produce a field summary
     if field_summary:
-        field_summary_response = generate_responses(prompt_context, model, template, knowledge_base, context)
+        field_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Field Summary")
         st.write(field_summary_response)
 
@@ -89,21 +93,33 @@ if generate_button and st.session_state['uploaded_file']:
     
     if data_summary:
         prompt_context = general_context + "Please summarize the data provided and consider this json string summarizing the data: \n"+ json_summary
-        data_summary_response = generate_responses(prompt_context, model, template, knowledge_base, context)
+        data_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Data Summary")
         st.write(data_summary_response)
     if recent_summary:
         prompt_context = general_context + "By comparing the following data summary with the recent data also provided, please provide analysis of the most recent data.\n Summary data:\n"+ json_summary+"\n Recent Data:\n"+json_recent
-        recent_summary_response = generate_responses(prompt_context, model, template, knowledge_base, context)
+        recent_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Recent Data Analysis")
         st.write(recent_summary_response)
+
+    if by_var !="None" and compare_bygroup:
+        dataframe = pd.read_csv(os.path.join("../data/raw/",st.session_state["uploaded_file"]))
+        group_counts = dataframe[by_var].value_counts()
+        group_summaries = "The following jsons summarize the data in each sub-group to compare.\n\n"
+        for group_name in group_counts.index:
+            group_summaries = group_summaries + str(group_name)+":\n"
+            group_summaries = group_summaries + dataframe[dataframe[by_var]==group_name].describe(include='all').to_json() + "\n\n"
+        prompt_context = general_context + group_summaries + "Please compare the metrics from the different sub-groups to each other."
+        comparison_response = generate_responses(prompt_context, model, template)
+        st.header(f"{by_var} Comparison Analysis")
+        st.write(comparison_response)
 
     prompt_context=""
     if len(requested_prompt)>1:
         print(f"Length of prompt: {len(requested_prompt)}")
         # Print the JSON string
         prompt_requested = requested_prompt + prompt_context + "\n" + requested_prompt
-        requested_response = generate_responses(prompt_requested, model, template, knowledge_base, context)
+        requested_response = generate_responses(prompt_requested, model, template)
         st.header(requested_prompt)
         st.write(requested_response)
     

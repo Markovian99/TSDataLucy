@@ -4,7 +4,7 @@ import os
 import json
 
 
-from config import MODELS, KNOWLEDGE_BASES, K, FETCH_K, CHUNK_SIZE, CHUNK_OVERLAP, TEMPERATURE, MAX_TOKENS
+from config import MODELS, TEMPERATURE, MAX_TOKENS
 
 from bardapi import Bard
 import openai
@@ -28,14 +28,11 @@ def initialize_session_state():
         "generated_responses" : False,
         "chat_history": [],
         "responses": [],
+        "categorical_features": [],
         "uploaded_file": None,
         "generation_model": None,
         "generation_prompt": None,
         "generation_prompt_final": None,
-        "k": K,
-        "fetch_k": FETCH_K,
-        "chunk_size": CHUNK_SIZE,
-        "chunk_overlap": CHUNK_OVERLAP,
         "temperature": TEMPERATURE,
         "max_tokens": MAX_TOKENS
     }
@@ -45,14 +42,13 @@ def initialize_session_state():
             st.session_state[k] = v
 
 # This is a dummy function to simulate generating responses.
-def generate_responses(prompt, model, template, knowledge_base, context):
+def generate_responses(prompt, model, template, temperature=0):
     response = "No model selected"
 
     if model != "None":
         st.session_state["generation_models"] = model
         st.session_state["generation_prompt"] = prompt
 
-        #### ADD KNOWLEDGE BASE LOOKUP
         final_prompt=prompt
         st.session_state["generation_prompt_final"] = final_prompt
 
@@ -60,7 +56,7 @@ def generate_responses(prompt, model, template, knowledge_base, context):
             this_answer = bard.get_answer(final_prompt)
             response = this_answer['content']
         elif model.startswith("OpenAI: "):
-            response_full = openai.ChatCompletion.create( model=model[8:],   messages=[{"role": "user", "content": final_prompt }])
+            response_full = openai.ChatCompletion.create( model=model[8:],   messages=[{"role": "user", "content": final_prompt }], temperature=temperature)
             response = response_full['choices'][0]['message']['content']
 
         st.session_state["responses"].append(response)
@@ -78,7 +74,16 @@ def save_to_db(position):#(model, prompt, final_prompt, response, prompt_templat
                        columns=['date', 'model','prompt','prompt_template','extra_context', 'final_prompt', 'response', 'rating'])
     #st.write(f"Saving response: {response}")
 
-
+def identify_categorical(df, unique_threshold=100, max_portion=0.1):
+    categorical_cols = []
+    max_unique = min(int(len(df) * max_portion), unique_threshold)
+    
+    potential_categorical_cols = df.select_dtypes(include=['int64', 'object']).columns
+    for col in potential_categorical_cols:
+        if df[col].nunique() <= max_unique:
+            categorical_cols.append(col)
+            
+    return categorical_cols
 
 def process_ts_data(df, date_var='date'):
     # Convert 'date' column to datetime type
@@ -92,7 +97,7 @@ def process_ts_data(df, date_var='date'):
         json.dump(data, json_file, indent=4)
 
     # Set 'date' as the index of the dataframe
-    df.set_index(date_var, inplace=True)
+    # df.set_index(date_var, inplace=True)
 
     use_rows=7
     if len(df.columns)>10:
