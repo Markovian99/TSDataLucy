@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION
 from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data, num_tokens_from_string
 
 # default session state variables
@@ -121,25 +121,15 @@ if generate_button and st.session_state['uploaded_file']:
         st.header(f"Data Summary")
         st.write(data_summary_response)
     if recent_summary:
-        prompt_context = general_context + "By comparing the following data summary with the recent data also provided, please provide analysis of the most recent data.\n Summary data:\n"+ json_start+"\n Recent Data:\n"+json_recent
+        prompt_context = general_context + "By comparing the data from the first period with the most recent period, please provide analysis of the most recent period.\n Start period:\n"+ json_start+"\n Recent period:\n"+json_recent
         recent_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Recent Data Analysis")
         st.write(recent_summary_response)
 
     if by_var and compare_bygroup:
-        dataframe = pd.read_csv(os.path.join("../data/raw/",st.session_state["uploaded_file"]))
-        group_counts = dataframe[by_var].value_counts()
-        group_summaries = "The following jsons summarize the data in each sub-group to compare.\n\n"
-        for group_name in group_counts.index:
-            group_summaries = group_summaries + str(group_name)+":\n"
-            group_summaries = group_summaries + dataframe[dataframe[by_var]==group_name].describe(include='all').to_json() + "\n\n"
-            # count the length of the prompt
-            prompt_len = num_tokens_from_string(group_summaries)
-            #if prompt is too long, exit for loop
-            if prompt_len>int(.9*MAX_TOKENS):
-                break
-
-        
+        # read in the comparison data into a string
+        with open('../data/processed/comparison.txt', 'r') as f:
+            group_summaries = f.read()        
         prompt_context = general_context + group_summaries + "Please compare the metrics from the different sub-groups to each other."
         comparison_response = generate_responses(prompt_context, model, template)
         st.header(f"{by_var} Comparison Analysis")
