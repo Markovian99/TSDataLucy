@@ -131,7 +131,7 @@ def process_ts_data(df, date_var='date', by_var=None):
     if by_var and len(data[[by_var, date_var]].groupby([by_var, date_var]).size())==len(data):
         #set index as by_var and date_var sorted
         data = data.sort_values([by_var, date_var])
-        data.set_index([by_var, date_var], inplace=True, drop=True)
+        data.set_index([by_var, date_var], inplace=True, drop=False)
     data_json = data.to_json()
     num_tokens = num_tokens_from_string(data_json)
     by_var_values = None
@@ -155,7 +155,7 @@ def process_ts_data(df, date_var='date', by_var=None):
     if by_var and len(data[[by_var, date_var]].groupby([by_var, date_var]).size())==len(data):
         #set index as by_var and date_var sorted
         data = data.sort_values([by_var, date_var])
-        data.set_index([by_var, date_var], inplace=True, drop=True)
+        data.set_index([by_var, date_var], inplace=True, drop=False)
     data_json = data.to_json()
     num_tokens = num_tokens_from_string(data_json)
     if  by_var and num_tokens > int(.9*MAX_TOKENS):
