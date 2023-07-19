@@ -3,6 +3,7 @@ import streamlit as st
 import os
 import json
 import tiktoken
+import numpy as np
 
 
 from config import MODELS, TEMPERATURE, MAX_TOKENS
@@ -136,7 +137,7 @@ def process_ts_data(df, date_var='date', by_var=None):
     by_var_values = None
     if  by_var and num_tokens > int(.9*MAX_TOKENS):
         # create a subset of the dateframe to a sample of the by_var
-        data = data[data[by_var].isin(data[by_var].sample(frac=int(num_tokens /.9*MAX_TOKENS)).unique())]
+        data = data[data[by_var].isin(np.random.choice(data[by_var].unique(),size=int(.9*MAX_TOKENS/num_tokens),replace=False))]
         #save unique values of by_var
         by_var_values = data[by_var].unique()
         data_json = json.loads(data.to_json())
@@ -162,7 +163,7 @@ def process_ts_data(df, date_var='date', by_var=None):
             data = data[data[by_var].isin(by_var_values)]
         else:
             # create a subset of the dateframe to a sample of the by_var
-            data = data[data[by_var].isin(data[by_var].sample(frac=int(num_tokens /.9*MAX_TOKENS)).unique())]   
+            data = data[data[by_var].isin(np.random.choice(data[by_var].unique(),size=int(.9*MAX_TOKENS/num_tokens),replace=False))] 
         data_json = json.loads(data.to_json())
         # write streamlit warning that the data was subset
         st.warning(f"Recent data was subset to {len(data)} rows to fit within the token limit of {MAX_TOKENS} tokens.")
