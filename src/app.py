@@ -1,18 +1,19 @@
 import streamlit as st
-from datetime import date
+from datetime import date, datetime
 import pandas as pd
 from io import StringIO
 import json
 import os
+
 
 from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
 from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR
-from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data
+from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data, num_tokens_from_string
 
-# # default session state variables
+# default session state variables
 initialize_session_state()
 
 # App layout
@@ -28,20 +29,12 @@ if uploaded_file is not None:
 
     st.session_state["uploaded_file"] = uploaded_file.name
     dataframe = pd.read_csv(uploaded_file)
+    dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR])
     st.session_state["categorical_features"]=["None"]+identify_categorical(dataframe)
-
-    process_ts_data(dataframe, DATE_VAR)
-
+    st.session_state["start_date"]=dataframe[DATE_VAR].min()
+    st.session_state["end_date"]=dataframe[DATE_VAR].max()
     st.write(dataframe)
 
-# User prompt
-brief_description = st.text_input("Please provide a brief description of the data file (e.g. This is market data for the S&P500)", "")
-
-# User prompt
-requested_prompt = st.text_input("(Optional) Enter your prompt", "")
-
-# Generate button
-generate_button = st.button("Generate Responses")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -54,12 +47,26 @@ with col2:
     trend_summary = st.checkbox("Trend Summary", value=False)
     compare_bygroup = st.checkbox("Compare by Group", value=False)
 
-if uploaded_file is not None:
+if uploaded_file is not None:    
+    col1, col2 = st.columns(2)
+    with col1:
+        d_min = st.date_input("Analysis Start Date", value=st.session_state["start_date"], min_value=st.session_state["start_date"], max_value=st.session_state["end_date"])
+    with col2:
+        d_max = st.date_input("Analysis End Date", value=st.session_state["end_date"], min_value=st.session_state["start_date"], max_value=st.session_state["end_date"])
     by_var = st.selectbox(f"Select Group By Variable ", st.session_state["categorical_features"])
-
     
 #don't have it appear until responses are generated
 clear_button = None
+
+
+# User prompt
+brief_description = st.text_input("Please provide a brief description of the data file (e.g. This is market data for the S&P500)", "")
+
+# User prompt
+requested_prompt = st.text_input("(Optional) Enter your prompt", "")
+
+# Generate button
+generate_button = st.button("Generate Responses")
 
 
 model = st.selectbox(f"Select Model ", MODELS)
@@ -67,48 +74,72 @@ template = st.text_input(f"Enter extra prompt details (added to end of all promp
 
 if generate_button and st.session_state['uploaded_file']:
 
+    # if by_var is not set, set it to None
+    if by_var =="None":
+        by_var = None
+
+    dataframe = pd.read_csv(os.path.join("../data/raw/"+st.session_state["uploaded_file"]))
+    dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR])
+    #subset dataframe based on min and max dates
+    dataframe = dataframe[(dataframe[DATE_VAR].dt.date>=d_min) & (dataframe[DATE_VAR].dt.date<=d_max)]
+
+    # process time series data to save descriptive information for prompts
+    process_ts_data(dataframe, DATE_VAR, by_var)
+
     #general context for prompts
     general_context = "You are a data analyst with a strong business intuition. " 
     if len(brief_description)>0:
         general_context = general_context + "A user provided the following brief description of the data: "+ brief_description + "\n"
 
-    # Open the file in read mode into Python dictionary then back to a JSON string
+    # Open the files in read mode into Python dictionary then back to a JSON string
     with open('../data/processed/head.json', 'r') as json_file:
         data = json.load(json_file)
     json_head = json.dumps(data, indent=4)
+    with open('../data/processed/summary_all.json', 'r') as json_file:
+        data = json.load(json_file)
+    json_summary_all = json.dumps(data, indent=4)
+    with open('../data/processed/summary.json', 'r') as json_file:
+        data = json.load(json_file)
+    json_summary = json.dumps(data, indent=4)
+    with open('../data/processed/start.json', 'r') as json_file:
+        data = json.load(json_file)
+    json_start = json.dumps(data, indent=4)
+    with open('../data/processed/recent.json', 'r') as json_file:
+        data = json.load(json_file)
+    json_recent = json.dumps(data, indent=4)
+
     prompt_context= general_context + "\n This is an example of the first set of rows \n"+json_head +"\n"+"Please decribe what the data fields may represent."
     #if checked, try to produce a field summary
     if field_summary:
         field_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Field Summary")
         st.write(field_summary_response)
-
-    # Open the file in read mode into Python dictionary then back to a JSON string
-    with open('../data/processed/summary.json', 'r') as json_file:
-        data = json.load(json_file)
-    json_summary = json.dumps(data, indent=4)
-    with open('../data/processed/tail.json', 'r') as json_file:
-        data = json.load(json_file)
-    json_recent = json.dumps(data, indent=4)
     
     if data_summary:
-        prompt_context = general_context + "Please summarize the data provided and consider this json string summarizing the data: \n"+ json_summary
+        prompt_context = general_context + "Please summarize the data provided and consider this json string summarizing the data: \n"+ json_summary_all
         data_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Data Summary")
         st.write(data_summary_response)
     if recent_summary:
-        prompt_context = general_context + "By comparing the following data summary with the recent data also provided, please provide analysis of the most recent data.\n Summary data:\n"+ json_summary+"\n Recent Data:\n"+json_recent
+        prompt_context = general_context + "By comparing the following data summary with the recent data also provided, please provide analysis of the most recent data.\n Summary data:\n"+ json_start+"\n Recent Data:\n"+json_recent
         recent_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Recent Data Analysis")
         st.write(recent_summary_response)
 
-    if by_var !="None" and compare_bygroup:
+    if by_var and compare_bygroup:
         dataframe = pd.read_csv(os.path.join("../data/raw/",st.session_state["uploaded_file"]))
         group_counts = dataframe[by_var].value_counts()
         group_summaries = "The following jsons summarize the data in each sub-group to compare.\n\n"
         for group_name in group_counts.index:
             group_summaries = group_summaries + str(group_name)+":\n"
             group_summaries = group_summaries + dataframe[dataframe[by_var]==group_name].describe(include='all').to_json() + "\n\n"
+            # count the length of the prompt
+            prompt_len = num_tokens_from_string(group_summaries)
+            #if prompt is too long, exit for loop
+            if prompt_len>int(.9*MAX_TOKENS):
+                break
+
+        
         prompt_context = general_context + group_summaries + "Please compare the metrics from the different sub-groups to each other."
         comparison_response = generate_responses(prompt_context, model, template)
         st.header(f"{by_var} Comparison Analysis")
