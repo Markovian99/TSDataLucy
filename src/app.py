@@ -10,14 +10,14 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME, MEAN_AGG
 from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data, num_tokens_from_string
 
 # default session state variables
 initialize_session_state()
 
 # App layout
-st.title("Time Series Data Analyizer - Lucy")
+st.title(APP_NAME)
 
 uploaded_file = st.file_uploader("Choose a file")
 if uploaded_file is not None:
@@ -35,17 +35,16 @@ if uploaded_file is not None:
     st.session_state["end_date"]=dataframe[DATE_VAR].max()
     st.write(dataframe)
 
-
+st.header("Summary Analysis Reports")
 col1, col2 = st.columns(2)
 with col1:
     # checkbox for each type of report
     field_summary = st.checkbox("Field Descriptions", value=True)
     data_summary = st.checkbox("Data Summary", value=True)
-    recent_summary = st.checkbox("Recent Data Analysis", value=True)
 with col2:
     # checkbox for each type of report
+    recent_summary = st.checkbox("Recent Data Analysis", value=True)
     trend_summary = st.checkbox("Trend Summary", value=False)
-    compare_bygroup = st.checkbox("Compare by Group", value=False)
 
 if uploaded_file is not None:    
     col1, col2 = st.columns(2)
@@ -53,7 +52,23 @@ if uploaded_file is not None:
         d_min = st.date_input("Analysis Start Date", value=st.session_state["start_date"], min_value=st.session_state["start_date"], max_value=st.session_state["end_date"])
     with col2:
         d_max = st.date_input("Analysis End Date", value=st.session_state["end_date"], min_value=st.session_state["start_date"], max_value=st.session_state["end_date"])
+
+    # streamlit header
+    st.header("Group By Analysis")
     by_var = st.selectbox(f"Select Group By Variable ", st.session_state["categorical_features"])
+
+    if by_var != "None":
+        col1, col2 = st.columns(2)
+        with col1:
+            # checkbox for each type of report
+            data_summary_by_group = st.checkbox("Data Summary by Group", value=True)
+            compare_by_group = st.checkbox("Compare Data by Group", value=False)            
+        with col2:
+            # checkbox for each type of report
+            recent_summary_by_group = st.checkbox("Recent Data Analysis by Group", value=False)
+            trend_summary_by_group = st.checkbox("Trend Summary by Group", value=False)
+            
+
     
 #don't have it appear until responses are generated
 clear_button = None
@@ -121,19 +136,39 @@ if generate_button and st.session_state['uploaded_file']:
         st.header(f"Data Summary")
         st.write(data_summary_response)
     if recent_summary:
-        prompt_context = general_context + "By comparing the data from the first period with the most recent period, please provide analysis of the most recent period.\n Start period:\n"+ json_start+"\n Recent period:\n"+json_recent
+        prompt_context = general_context + "Compare the aggregated data from the start period with the most recent period to provide analysis of the most recent period.\n Start period:\n"+ json_start+"\n Recent period:\n"+json_recent
         recent_summary_response = generate_responses(prompt_context, model, template)
         st.header(f"Recent Data Analysis")
         st.write(recent_summary_response)
 
-    if by_var and compare_bygroup:
-        # read in the comparison data into a string
-        with open('../data/processed/comparison.txt', 'r') as f:
-            group_summaries = f.read()        
-        prompt_context = general_context + group_summaries + "Please compare the metrics from the different sub-groups to each other."
-        comparison_response = generate_responses(prompt_context, model, template)
-        st.header(f"{by_var} Comparison Analysis")
-        st.write(comparison_response)
+    if by_var:
+        if data_summary_by_group:
+            # read in the summary data into a string
+            with open('../data/processed/comparison.txt', 'r') as f:
+                group_summaries = f.read()           
+            prompt_context = general_context + group_summaries + "Please summarize the data provided by group."
+            data_summary_response = generate_responses(prompt_context, model, template)
+            st.header(f"Data Summary by {by_var}")
+            st.write(data_summary_response)
+        if compare_by_group:
+            # read in the comparison data into a string
+            with open('../data/processed/comparison.txt', 'r') as f:
+                group_summaries = f.read()        
+            prompt_context = general_context + group_summaries + "Please compare the metrics from the different sub-groups to each other."
+            comparison_response = generate_responses(prompt_context, model, template)
+            st.header(f"{by_var} Comparison Analysis")
+            st.write(comparison_response)
+        if recent_summary_by_group:
+            # read in the data into a strings
+            with open('../data/processed/start_by_group.json', 'r') as f:
+                json_start_by_group = f.read() 
+            with open('../data/processed/recent_by_group.json', 'r') as f:
+                json_recent_by_group = f.read()     
+            prompt_context = general_context + f"Compare the data from the start period with the most recent period for each {by_var} to provide analysis of the most recent period.\n Start period:\n"+ \
+                            json_start_by_group+"\n Recent period:\n"+json_recent_by_group
+            recent_summary_response = generate_responses(prompt_context, model, template)
+            st.header(f"Recent Data Analysis by {by_var}")
+            st.write(recent_summary_response)   
 
     prompt_context=""
     if len(requested_prompt)>1:
@@ -160,10 +195,3 @@ elif clear_button:
     st.write("No responses to clear - please generate responses")
         # responses = []
         # ratings = [None, None, None]
-
-# Display responses 
-if st.session_state["generated_responses"] and not generate_button:
-    # placeholder_list[i] = st.empty()
-    st.header(f"Response ")
-
-    st.write(st.session_state["responses"])

@@ -6,3 +6,7 @@ MAX_TOKENS = 8193
 DATA_FRACTION=.8
 
 DATE_VAR = "date"
+APP_NAME = "Time Series Data Analyizer - Lucy"
+
+# Aggregation defaults to sum unless feature is specified in list here
+MEAN_AGG = []

@@ -42,6 +42,31 @@ def identify_categorical(df, unique_threshold=100, max_portion=0.1):
             
     return categorical_cols
 
+def group_as_needed(df_input, date_var, by_var=None):
+    """Group data by date_var and by_var if needed."""
+    df = df_input.copy()
+    numeric_cols =  df.select_dtypes(include=['int16', 'int32', 'int64', 'float16', 'float32', 'float64']).columns.to_list()
+    object_cols = df.select_dtypes(include=['object']).columns.to_list()
+
+    if by_var:
+        grouping = [by_var, date_var]
+    else:
+        grouping = [date_var]
+
+    if len(df[grouping].groupby(grouping).size())==len(df):
+        #set index as by_var and date_var sorted for json file
+        df.set_index(grouping, inplace=True, drop=False)
+    else:
+        # use pandas groupby to aggregate by by_var and date_var. For objects use the mode and add postfix "mode", for numeric use the sum
+        df_num = df[numeric_cols+grouping].groupby(grouping).sum()
+        if len(object_cols)>0:
+            df_obj = df[object_cols+grouping].groupby(grouping).agg(lambda x:x.value_counts().index[0])
+            df_obj.columns = [f"{col}_mode" for col in df_obj.columns]
+            df = pd.concat([df_num, df_obj], axis=1)
+        else:
+            df = df_num
+    return df
+
 def initialize_session_state():
     """ Initialise all session state variables with defaults """
     SESSION_DEFAULTS = {
@@ -128,62 +153,61 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
     with open('../data/processed/head.json', 'w') as json_file:
         json.dump(data, json_file, indent=4)
 
-    # subset to all numeric columns and date column and by_var for analysis
-    numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
-    cols = df.select_dtypes(include=numerics).columns.to_list() + [date_var]
-    if by_var: cols.append(by_var)
-    df = df[cols]
-
-    # if we need to only keep a subset of by_var values due to size of data
-    by_var_values = []
-
     # keep only the first 7 days in the dataframe and write json file
-    data = df[df[date_var] < df[date_var].min() + pd.Timedelta(days=7)]
-    #check if by_var is not None and if by_var, date_var combination is unique
-    if by_var and len(data[[by_var, date_var]].groupby([by_var, date_var]).size())==len(data):
-        #set index as by_var and date_var sorted for json file
-        data = data.sort_values([by_var, date_var])
-        data.set_index([by_var, date_var], inplace=True, drop=False)
-    data_json = data.to_json()
-    num_tokens = num_tokens_from_string(data_json)
-    if  by_var and num_tokens > int(DATA_FRACTION*MAX_TOKENS):
-        # create a subset of the dateframe to a sample of the by_var
-        data = data[data[by_var].isin(np.random.choice(data[by_var].unique(),size=int(len(data[by_var].unique())*DATA_FRACTION*MAX_TOKENS/num_tokens),replace=False))]
-        #save unique values of by_var
-        by_var_values = data[by_var].unique()
-        data_json = json.loads(data.to_json())
-        # write streamlit warning that the data was subset
-        st.warning(f"Start data was subset to {len(data)} rows to fit within the token limit of {MAX_TOKENS} tokens.")
-    else: 
-        data_json = json.loads(data_json)
+    data = df[df[date_var] < df[date_var].min() + pd.Timedelta(days=7)].sort_values([date_var])
+    data = group_as_needed(data, date_var, by_var=None)
+    data_json = json.loads(data.to_json())
     with open('../data/processed/start.json', 'w') as json_file:
         json.dump(data_json, json_file, indent=4)
 
     # keep only the last 7 days in the dataframe and write json file
-    data = df[df[date_var] > df[date_var].max() - pd.Timedelta(days=7)]  
-    #check if by_var is not None and if by_var, date_var combination is unique
-    if by_var and len(data[[by_var, date_var]].groupby([by_var, date_var]).size())==len(data):
-        #set index as by_var and date_var sorted for json file
-        data = data.sort_values([by_var, date_var])
-        data.set_index([by_var, date_var], inplace=True, drop=False)
-    data_json = data.to_json()
-    num_tokens = num_tokens_from_string(data_json)
-    if  by_var and num_tokens > int(DATA_FRACTION*MAX_TOKENS):
-        if len(by_var_values)>0 and len(data[data[by_var].isin(by_var_values)])>0:
-            data = data[data[by_var].isin(by_var_values)]
-        else:
-            # create a subset of the dateframe to a sample of the by_var
-            data = data[data[by_var].isin(np.random.choice(data[by_var].unique(),size=int(len(data[by_var].unique())*DATA_FRACTION*MAX_TOKENS/num_tokens),replace=False))] 
-        data_json = json.loads(data.to_json())
-        # write streamlit warning that the data was subset
-        st.warning(f"Recent data was subset to {len(data)} rows to fit within the token limit of {MAX_TOKENS} tokens.")
-    else: 
-        data_json = json.loads(data_json)
+    data = df[df[date_var] > df[date_var].max() - pd.Timedelta(days=7)].sort_values([date_var])
+    data = group_as_needed(data, date_var, by_var=None)
+    data_json = json.loads(data.to_json())
     with open('../data/processed/recent.json', 'w') as json_file:
         json.dump(data_json, json_file, indent=4)
 
-    # if by_var is not None, create a summary comparison by group
+    # if by_var is not None, create a reports by group
+    # if we need to only keep a subset of by_var values due to size of data
+    by_var_values = []
     if by_var:
+        # keep only the first 7 days in the dataframe and write json file
+        data = df[df[date_var] < df[date_var].min() + pd.Timedelta(days=7)].sort_values([by_var, date_var])
+        data = group_as_needed(data, date_var, by_var=by_var)
+        data_json = data.to_json()
+        num_tokens = num_tokens_from_string(data_json)
+        if  num_tokens > int(DATA_FRACTION*MAX_TOKENS):
+            # create a subset of the dateframe to a sample of the by_var
+            data = data[data[by_var].isin(np.random.choice(data[by_var].unique(),size=int(len(data[by_var].unique())*DATA_FRACTION*MAX_TOKENS/num_tokens),replace=False))]
+            #save unique values of by_var
+            by_var_values = data[by_var].unique()
+            data_json = json.loads(data.to_json())
+            # write streamlit warning that the data was subset
+            st.warning(f"Start GroupBy data was subset to {len(data)} rows to fit within the token limit of {MAX_TOKENS} tokens.")
+        else: 
+            data_json = json.loads(data_json)
+        with open('../data/processed/start_by_group.json', 'w') as json_file:
+            json.dump(data_json, json_file, indent=4)
+
+        # keep only the last 7 days in the dataframe and write json file
+        data = df[df[date_var] > df[date_var].max() - pd.Timedelta(days=7)]  
+        data = group_as_needed(data, date_var, by_var=by_var)
+        data_json = data.to_json()
+        num_tokens = num_tokens_from_string(data_json)
+        if  num_tokens > int(DATA_FRACTION*MAX_TOKENS):
+            if len(by_var_values)>0 and len(data[data[by_var].isin(by_var_values)])>0:
+                data = data[data[by_var].isin(by_var_values)]
+            else:
+                # create a subset of the dateframe to a sample of the by_var
+                data = data[data[by_var].isin(np.random.choice(data[by_var].unique(),size=int(len(data[by_var].unique())*DATA_FRACTION*MAX_TOKENS/num_tokens),replace=False))] 
+            data_json = json.loads(data.to_json())
+            # write streamlit warning that the data was subset
+            st.warning(f"Recent GroupBy data was subset to {len(data)} rows to fit within the token limit of {MAX_TOKENS} tokens.")
+        else: 
+            data_json = json.loads(data_json)
+        with open('../data/processed/recent_by_group.json', 'w') as json_file:
+            json.dump(data_json, json_file, indent=4)
+
         group_counts = df[by_var].value_counts()
         group_summaries = ""
         for group_name in group_counts.index:
