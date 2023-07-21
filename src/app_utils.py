@@ -42,11 +42,32 @@ def identify_categorical(df, unique_threshold=100, max_portion=0.1):
             
     return categorical_cols
 
+def mode(x):
+    # Check for missing values and empty groups
+    if x.isnull().all() or x.empty:
+        return np.nan
+    else:
+        # Use value_counts and return the index of the first occurrence of the maximum value
+        mode = x.value_counts().idxmax()
+        return mode
+
+def missing(x):
+    return x.isnull().sum()
+
+# Specify the aggregation functions for each column
+#agg_funcs = {col: [('mode', mode), ('missing', missing)] for col in object_cols}
+# Apply groupby and agg
+#df_obj = df[object_cols+grouping].groupby(grouping).agg(agg_funcs)
+
+
 def group_as_needed(df_input, date_var, by_var=None):
     """Group data by date_var and by_var if needed."""
     df = df_input.copy()
-    numeric_cols =  df.select_dtypes(include=['int16', 'int32', 'int64', 'float16', 'float32', 'float64']).columns.to_list()
+    # only keep numeric and object columns not entirely missing
+    numeric_cols =  df.select_dtypes(include=['int16', 'int32', 'int64', 'float16', 'float32', 'float64']).columns.to_list()    
+    numeric_cols = [col for col in numeric_cols if df[col].isnull().sum()<len(df[col])]
     object_cols = df.select_dtypes(include=['object']).columns.to_list()
+    object_cols = [col for col in object_cols if df[col].isnull().sum()<len(df[col])]
 
     if by_var:
         grouping = [by_var, date_var]
@@ -58,13 +79,14 @@ def group_as_needed(df_input, date_var, by_var=None):
         df.set_index(grouping, inplace=True, drop=False)
     else:
         # use pandas groupby to aggregate by by_var and date_var. For objects use the mode and add postfix "mode", for numeric use the sum
-        df_num = df[numeric_cols+grouping].groupby(grouping).sum()
+        df_num = df[list(set(numeric_cols+grouping))].groupby(grouping).sum()
         if len(object_cols)>0:
-            df_obj = df[object_cols+grouping].groupby(grouping).agg(lambda x:x.value_counts().index[0])
+            df_obj = df[list(set(object_cols+grouping))].groupby(grouping).agg(lambda x:x.mode())
             df_obj.columns = [f"{col}_mode" for col in df_obj.columns]
             df = pd.concat([df_num, df_obj], axis=1)
         else:
             df = df_num
+        df = df.reset_index().set_index(grouping, drop=False)
     return df
 
 def initialize_session_state():
