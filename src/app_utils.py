@@ -24,6 +24,30 @@ if os.getenv('OPENAI_API_VERSION'):
 bard = Bard(token=os.getenv('BARD_API_KEY'))
 
 
+def initialize_session_state():
+    """ Initialise all session state variables with defaults """
+    SESSION_DEFAULTS = {
+        "cleared_responses" : False,
+        "generated_responses" : False,
+        "chat_history": [],
+        "categorical_features": [],
+        "numeric_features": [],
+        "features_to_analyze": [],        
+        "start_date": None,
+        "end_date": None,
+        "uploaded_file": None,
+        "generation_model": MODELS[0],
+        "generation_prompt": None,
+        "generation_prompt_final": None,
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS
+    }
+
+    for k, v in SESSION_DEFAULTS.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
 def num_tokens_from_string(string: str) -> int:
     """Returns the number of tokens in a text string."""
     encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
@@ -41,6 +65,32 @@ def identify_categorical(df, unique_threshold=100, max_portion=0.1):
             categorical_cols.append(col)
             
     return categorical_cols
+
+def identify_features_to_analyze(df, unique_min=0, use_llm=False, prompt_prefix=""):
+    """Identify possible features_to_analyze in a dataframe."""
+    cols = []
+
+    # select all numeric columns
+    numeric_cols =  df.select_dtypes('number').columns.to_list()
+    for col in numeric_cols:
+        if df[col].nunique() > unique_min:
+            cols.append(col)
+
+    if len(cols)==0:
+        st.warning("No numeric columns appropriate for analyzing were found in data.")
+    elif use_llm and st.session_state["generation_model"]!="":
+        model = st.session_state["generation_model"]
+        template=""
+        prompt = prompt_prefix+" The following is a summary of the numeric data in the dataframe: \n\n"+str(df[cols].describe().to_json())+ \
+                "\n\nWhat are features that should be analyzed? Please do not mention any features that should not be analyzed."
+        response = generate_responses(prompt, model, template, temperature=0)
+
+        print(f"Response: {response}")
+        
+        # check which columns are in the response which is a string
+        cols = [col for col in cols if col.lower() in response.lower()]
+
+    return cols
 
 def mode(x):
     # Check for missing values and empty groups
@@ -94,7 +144,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
         if  num_tokens > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
             data = data.describe(include='all')
-            data_json = json.loads(data.to_json())
+            data_json = data.to_json()
             # write streamlit warning that the data only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
         data_json = json.loads(data_json)
@@ -131,30 +181,9 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
     with open('../data/processed/'+file_name, 'w') as json_file:
         json.dump(data_json, json_file, indent=4)
 
-def initialize_session_state():
-    """ Initialise all session state variables with defaults """
-    SESSION_DEFAULTS = {
-        "cleared_responses" : False,
-        "generated_responses" : False,
-        "chat_history": [],
-        "responses": [],
-        "categorical_features": [],
-        "start_date": None,
-        "end_date": None,
-        "uploaded_file": None,
-        "generation_model": None,
-        "generation_prompt": None,
-        "generation_prompt_final": None,
-        "temperature": TEMPERATURE,
-        "max_tokens": MAX_TOKENS
-    }
-
-    for k, v in SESSION_DEFAULTS.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
 
 # This is a dummy function to simulate generating responses.
-def generate_responses(prompt, model, template, temperature=0):
+def generate_responses(prompt, model, template="", temperature=0):
     response = "No model selected"
 
     if model != "None":
@@ -171,20 +200,8 @@ def generate_responses(prompt, model, template, temperature=0):
             response_full = openai.ChatCompletion.create( model=model[8:],   messages=[{"role": "user", "content": final_prompt }], temperature=temperature)
             response = response_full['choices'][0]['message']['content']
 
-        st.session_state["responses"].append(response)
-
     return response
 
-
-# This is a dummy function to simulate saving responses to a database.
-def save_to_db(position):#(model, prompt, final_prompt, response, prompt_template="", extra_context="", rating=-1):
-    today = date.today()
-    prompt_template=""
-    extra_context=""
-    df = pd.DataFrame([[today,st.session_state["generation_model"], st.session_state["generation_prompt"], prompt_template, extra_context,
-                       st.session_state["generation_prompt_final"], st.session_state["responses"], st.session_state["ratings"]]], 
-                       columns=['date', 'model','prompt','prompt_template','extra_context', 'final_prompt', 'response', 'rating'])
-    #st.write(f"Saving response: {response}")
 
 def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
     """Process time series data and save to various json files for streamlit app.
@@ -212,26 +229,26 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
     if len(df.columns)>10:
         use_rows=2
     # keep only the head of dataframe and write json file
-    process_data_to_json(df.head(use_rows), date_var=None, by_var=None, file_name='head.json', prompt_frac=.5*DATA_FRACTION*MAX_TOKENS)
+    process_data_to_json(df.head(use_rows), date_var=None, by_var=None, file_name='head.json', prompt_frac=.5*DATA_FRACTION)
 
     # keep only the first 7 days in the dataframe and write json file
     data = df[df[date_var] < df[date_var].min() + pd.Timedelta(days=7)].sort_values([date_var])
-    process_data_to_json(data, date_var=date_var, by_var=None, file_name='start.json', prompt_frac=.5*DATA_FRACTION*MAX_TOKENS)
+    process_data_to_json(data, date_var=date_var, by_var=None, file_name='start.json', prompt_frac=.5*DATA_FRACTION)
 
     # keep only the last 7 days in the dataframe and write json file
     data = df[df[date_var] > df[date_var].max() - pd.Timedelta(days=7)].sort_values([date_var])
-    process_data_to_json(data, date_var=date_var, by_var=None, file_name='recent.json', prompt_frac=.5*DATA_FRACTION*MAX_TOKENS)
+    process_data_to_json(data, date_var=date_var, by_var=None, file_name='recent.json', prompt_frac=.5*DATA_FRACTION)
 
     # if by_var is not None, create a reports by group
     # if we need to only keep a subset of by_var values due to size of data
     if by_var:
         # keep only the first 7 days in the dataframe and write json file
         data = df[df[date_var] < df[date_var].min() + pd.Timedelta(days=7)].sort_values([by_var, date_var])
-        process_data_to_json(data, date_var=date_var, by_var=by_var, file_name='start_by_group.json', prompt_frac=.5*DATA_FRACTION*MAX_TOKENS)
+        process_data_to_json(data, date_var=date_var, by_var=by_var, file_name='start_by_group.json', prompt_frac=.5*DATA_FRACTION)
 
         # keep only the last 7 days in the dataframe and write json file
         data = df[df[date_var] > df[date_var].max() - pd.Timedelta(days=7)]  
-        process_data_to_json(data, date_var=date_var, by_var=by_var, file_name='recent_by_group.json', prompt_frac=.5*DATA_FRACTION*MAX_TOKENS)
+        process_data_to_json(data, date_var=date_var, by_var=by_var, file_name='recent_by_group.json', prompt_frac=.5*DATA_FRACTION)
 
         group_counts = df[by_var].value_counts()
         group_summaries = ""

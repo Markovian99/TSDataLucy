@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME, MEAN_AGG
-from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data, num_tokens_from_string
+from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data, num_tokens_from_string, identify_features_to_analyze
 
 # default session state variables
 initialize_session_state()
@@ -19,10 +19,22 @@ initialize_session_state()
 # App layout
 st.title(APP_NAME)
 
+#general context for prompts
+general_context = "" 
+with st.sidebar:
+    model = st.selectbox(f"Select Model ", MODELS)
+    st.session_state["generation_model"]=model
+    general_context = st.text_area(f"Enter extra prompt details (added to the beginning of all prompts)", "You are a data analyst with a strong business intuition.")
+general_context=general_context+" "
+
+# User prompt
+brief_description = st.text_input("Please provide a brief description of the data file (e.g. This is market data for the S&P500)", "")
+if len(brief_description)>0:
+        general_context = general_context + "The following brief description of the data was provided: "+ brief_description + "\n"
+
 uploaded_file = st.file_uploader("Choose a file")
+
 if uploaded_file is not None:
-    print(uploaded_file.name)
-    print(os. getcwd() )
     #copy the file to "raw" folder
     with open(os.path.join("../data/raw/",uploaded_file.name),"wb") as f:
          f.write(uploaded_file.getbuffer())
@@ -31,6 +43,16 @@ if uploaded_file is not None:
     dataframe = pd.read_csv(uploaded_file)
     dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR])
     st.session_state["categorical_features"]=["None"]+identify_categorical(dataframe)
+    if st.session_state["numeric_features"]==[]:
+        st.session_state["numeric_features"]=identify_features_to_analyze(dataframe)
+        try:
+            # use genai to create the default list of features to analyze
+            st.session_state["features_to_analyze"]=identify_features_to_analyze(dataframe,use_llm=True,prompt_prefix=general_context)
+            print("Features to analyze: ")
+            print(st.session_state["features_to_analyze"])
+        except Exception as e:
+            print(e)
+            st.session_state["features_to_analyze"]=st.session_state["numeric_features"]
     st.session_state["start_date"]=dataframe[DATE_VAR].min()
     st.session_state["end_date"]=dataframe[DATE_VAR].max()
     st.write(dataframe)
@@ -53,6 +75,9 @@ if uploaded_file is not None:
     with col2:
         d_max = st.date_input("Analysis End Date", value=st.session_state["end_date"], min_value=st.session_state["start_date"], max_value=st.session_state["end_date"])
 
+    selected_features = st.multiselect('What are the metrics / features to analyze?', st.session_state["numeric_features"], default=st.session_state["features_to_analyze"])
+    drop_features = [f for f in st.session_state["numeric_features"] if f not in selected_features and f!=DATE_VAR]
+
     # streamlit header
     st.header("Group By Analysis")
     by_var = st.selectbox(f"Select Group By Variable ", st.session_state["categorical_features"])
@@ -73,22 +98,14 @@ if uploaded_file is not None:
 #don't have it appear until responses are generated
 clear_button = None
 
-
-# User prompt
-brief_description = st.text_input("Please provide a brief description of the data file (e.g. This is market data for the S&P500)", "")
-
 # User prompt
 requested_prompt = st.text_input("(Optional) Enter your prompt", "")
 
 # Generate button
 generate_button = st.button("Generate Responses")
 
-
-model = st.selectbox(f"Select Model ", MODELS)
-template = st.text_input(f"Enter extra prompt details (added to end of all prompts)", "")
-
 if generate_button and st.session_state['uploaded_file']:
-
+    template=""
     # if by_var is not set, set it to None
     if by_var =="None":
         by_var = None
@@ -97,14 +114,10 @@ if generate_button and st.session_state['uploaded_file']:
     dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR])
     #subset dataframe based on min and max dates
     dataframe = dataframe[(dataframe[DATE_VAR].dt.date>=d_min) & (dataframe[DATE_VAR].dt.date<=d_max)]
+    dataframe = dataframe.drop(drop_features, axis=1)
 
     # process time series data to save descriptive information for prompts
     process_ts_data(dataframe, DATE_VAR, by_var)
-
-    #general context for prompts
-    general_context = "You are a data analyst with a strong business intuition. " 
-    if len(brief_description)>0:
-        general_context = general_context + "A user provided the following brief description of the data: "+ brief_description + "\n"
 
     # Open the files in read mode into Python dictionary then back to a JSON string
     with open('../data/processed/head.json', 'r') as json_file:
