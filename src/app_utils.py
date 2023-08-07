@@ -5,8 +5,14 @@ import json
 import tiktoken
 import numpy as np
 
+from langchain.document_loaders import DirectoryLoader
+from langchain.text_splitter import (
+	MarkdownTextSplitter,
+	PythonCodeTextSplitter,
+	RecursiveCharacterTextSplitter)
 
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATA_FRACTION
+
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATA_FRACTION, EMBEDDING_MODELS, SOURCE_DOCUMENTS_DIR
 
 from bardapi import Bard
 import openai
@@ -32,15 +38,19 @@ def initialize_session_state():
         "chat_history": [],
         "categorical_features": [],
         "numeric_features": [],
-        "features_to_analyze": [],        
+        "features_to_analyze": [],      
+        "selected_features": [],  
         "start_date": None,
         "end_date": None,
+        "d_min": None,
+        "d_max": None,
         "uploaded_file": None,
+        "by_var" : "None",
         "generation_model": MODELS[0],
-        "generation_prompt": None,
-        "generation_prompt_final": None,
+        "general_context": "",
         "temperature": TEMPERATURE,
-        "max_tokens": MAX_TOKENS
+        "max_tokens": MAX_TOKENS,
+        "messages": []
     }
 
     for k, v in SESSION_DEFAULTS.items():
@@ -81,11 +91,9 @@ def identify_features_to_analyze(df, unique_min=0, use_llm=False, prompt_prefix=
     elif use_llm and st.session_state["generation_model"]!="":
         model = st.session_state["generation_model"]
         template=""
-        prompt = prompt_prefix+" The following is a summary of the numeric data in the dataframe: \n\n"+str(df[cols].describe().to_json())+ \
+        prompt = prompt_prefix+" The following is a summary of the numeric data in the dataframe: \n\n"+str(df[cols].describe(datetime_is_numeric=False).to_json())+ \
                 "\n\nWhat are features that should be analyzed? Please do not mention any features that should not be analyzed."
         response = generate_responses(prompt, model, template, temperature=0)
-
-        print(f"Response: {response}")
         
         # check which columns are in the response which is a string
         cols = [col for col in cols if col.lower() in response.lower()]
@@ -143,7 +151,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
         num_tokens = num_tokens_from_string(data_json)
         if  num_tokens > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
-            data = data.describe(include='all')
+            data = data.describe(include='all', datetime_is_numeric=False)
             data_json = data.to_json()
             # write streamlit warning that the data only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
@@ -152,7 +160,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
         data_json = group_as_needed(data, grouping=[by_var]).to_json()
         if  num_tokens_from_string(data_json) > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
-            data = df_input.describe(include='all')
+            data = df_input.describe(include='all', datetime_is_numeric=False)
             data_json = data.to_json()
             # write streamlit warning that the data was only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
@@ -161,7 +169,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
         data_json = group_as_needed(data, grouping=[date_var]).to_json()
         if  num_tokens_from_string(data_json) > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
-            data = df_input.describe(include='all')
+            data = df_input.describe(include='all', datetime_is_numeric=False)
             data_json = json.loads(data.to_json())
             # write streamlit warning that the data was only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
@@ -188,16 +196,12 @@ def generate_responses(prompt, model, template="", temperature=0):
 
     if model != "None":
         st.session_state["generation_models"] = model
-        st.session_state["generation_prompt"] = prompt
-
-        final_prompt=prompt
-        st.session_state["generation_prompt_final"] = final_prompt
 
         if model.startswith("Google"):
-            this_answer = bard.get_answer(final_prompt)
+            this_answer = bard.get_answer(prompt)
             response = this_answer['content']
         elif model.startswith("OpenAI: "):
-            response_full = openai.ChatCompletion.create( model=model[8:],   messages=[{"role": "user", "content": final_prompt }], temperature=temperature)
+            response_full = openai.ChatCompletion.create( model=model[8:],   messages=[{"role": "user", "content": prompt }], temperature=temperature)
             response = response_full['choices'][0]['message']['content']
 
     return response
@@ -215,12 +219,12 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
     df = df_input.copy()
 
     # Summarize the dataframe (all and numeric only)
-    data = json.loads(df.describe(include='all').to_json())
+    data = json.loads(df.describe(include='all', datetime_is_numeric=False).to_json())
     # Now, let's write this data to a file
     with open('../data/processed/summary_all.json', 'w') as json_file:
         json.dump(data, json_file, indent=4)
 
-    data = json.loads(df.describe().to_json())
+    data = json.loads(df.describe(datetime_is_numeric=False).to_json())
     # Now, let's write this data to a file
     with open('../data/processed/summary.json', 'w') as json_file:
         json.dump(data, json_file, indent=4)
@@ -253,7 +257,7 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
         group_counts = df[by_var].value_counts()
         group_summaries = ""
         for group_name in group_counts.index:
-            group_summaries = group_summaries + str(group_name)+":\n" + df[df[by_var]==group_name].describe().to_json() + "\n\n"
+            group_summaries = group_summaries + str(group_name)+":\n" + df[df[by_var]==group_name].describe(datetime_is_numeric=False).to_json() + "\n\n"
             # count the length of the prompt
             prompt_len = num_tokens_from_string(group_summaries)
             #if prompt is too long, exit for loop
@@ -266,3 +270,41 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
 
 
 
+def create_knowledge_base(df_input:pd.DataFrame, date_var='date', by_var=None):
+    """Create knowledge base for chatbot."""
+    process_ts_data(df_input, date_var=date_var, by_var=by_var)
+    
+
+    loader = DirectoryLoader(f"{SOURCE_DOCUMENTS_DIR}")
+
+    splitter = MarkdownTextSplitter(
+        chunk_size=2000,
+        chunk_overlap=1000,
+    )
+
+    print(f"Loading {SOURCE_DOCUMENTS_DIR}")
+    data = loader.load()
+        
+    print(f"Splitting {len(data)} documents")
+    docs = splitter.split_documents(data)
+    
+    print(f"Created {len(docs)} documents")
+
+    # Will download the model the first time it runs
+    embedding_function = SentenceTransformerEmbeddings(
+        model_name=EMBEDDING_MODELS[0],
+        cache_folder="../data/sentencetransformers",
+    )
+    texts = [doc.page_content for doc in docs]
+    metadatas = [doc.metadata for doc in docs]
+    print("""
+        Computing embedding vectors and building FAISS db.
+        WARNING: This may take a long time. You may want to increase the number of CPU's in your noteboook.
+        """
+    )
+    db = FAISS.from_texts(texts, embedding_function, metadatas=metadatas)  
+    # Save the FAISS db 
+    db.save_local("../data/faiss-db")
+
+    print(f"FAISS VectorDB has {db.index.ntotal} documents")
+    
