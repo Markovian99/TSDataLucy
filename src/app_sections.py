@@ -37,7 +37,7 @@ def run_upload_and_settings():
 
         st.session_state["uploaded_file"] = uploaded_file.name
         dataframe = pd.read_csv(uploaded_file)
-        dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR])
+        dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR], format="%Y-%m-%d")
         st.session_state["categorical_features"]=["None"]+identify_categorical(dataframe)
         if st.session_state["numeric_features"]==[]:
             st.session_state["numeric_features"]=identify_features_to_analyze(dataframe)
@@ -122,23 +122,18 @@ def run_report_gererator():
         process_ts_data(dataframe, DATE_VAR, by_var)
 
         # Open the files in read mode into Python dictionary then back to a JSON string
-        with open('../data/processed/head.json', 'r') as json_file:
-            data = json.load(json_file)
-        json_head = json.dumps(data, indent=4)
-        with open('../data/processed/summary_all.json', 'r') as json_file:
-            data = json.load(json_file)
-        json_summary_all = json.dumps(data, indent=4)
-        with open('../data/processed/summary.json', 'r') as json_file:
-            data = json.load(json_file)
-        json_summary = json.dumps(data, indent=4)
-        with open('../data/processed/start.json', 'r') as json_file:
-            data = json.load(json_file)
-        json_start = json.dumps(data, indent=4)
-        with open('../data/processed/recent.json', 'r') as json_file:
-            data = json.load(json_file)
-        json_recent = json.dumps(data, indent=4)
+        with open('../data/processed/head.txt', 'r') as f:
+            head_str = f.read()
+        with open('../data/processed/summary_all.txt', 'r') as f:
+            summary_all_str = f.read()
+        with open('../data/processed/summary.txt', 'r') as f:
+            summary_str = f.read()
+        with open('../data/processed/start.txt', 'r') as f:
+            start_str = f.read()
+        with open('../data/processed/recent.txt', 'r') as f:
+            recent_str = f.read()
 
-        prompt_context= general_context + "\n This is an example of the first set of rows \n"+json_head +"\n"+"Please decribe what the data fields may represent."
+        prompt_context= general_context + "\n This is an example of the first set of rows \n"+head_str +"\n"+"Please describe what the data fields may represent."
         #if checked, try to produce a field summary
         if field_summary:
             field_summary_response = generate_responses(prompt_context, model, template)
@@ -146,12 +141,12 @@ def run_report_gererator():
             st.write(field_summary_response)
         
         if data_summary:
-            prompt_context = general_context + "Please summarize the data provided and consider this json string summarizing the data: \n"+ json_summary_all
+            prompt_context = general_context + "Please summarize the data provided and consider this json string summarizing the data: \n"+ summary_all_str
             data_summary_response = generate_responses(prompt_context, model, template)
             st.header(f"Data Summary")
             st.write(data_summary_response)
         if recent_summary:
-            prompt_context = general_context + "Compare the aggregated data from the start period with the most recent period to provide analysis of the most recent period.\n Start period:\n"+ json_start+"\n Recent period:\n"+json_recent
+            prompt_context = general_context + "Compare the aggregated data from the start period with the most recent period to provide analysis of the most recent period.\n Start period:\n"+ start_str+"\n Recent period:\n"+recent_str
             recent_summary_response = generate_responses(prompt_context, model, template)
             st.header(f"Recent Data Analysis")
             st.write(recent_summary_response)
@@ -175,9 +170,9 @@ def run_report_gererator():
                 st.write(comparison_response)
             if recent_summary_by_group:
                 # read in the data into a strings
-                with open('../data/processed/start_by_group.json', 'r') as f:
+                with open('../data/processed/start_by_group.txt', 'r') as f:
                     json_start_by_group = f.read() 
-                with open('../data/processed/recent_by_group.json', 'r') as f:
+                with open('../data/processed/recent_by_group.txt', 'r') as f:
                     json_recent_by_group = f.read()     
                 prompt_context = general_context + f"Compare the data from the start period with the most recent period for each {by_var} to provide analysis of the most recent period.\n Start period:\n"+ \
                                 json_start_by_group+"\n Recent period:\n"+json_recent_by_group

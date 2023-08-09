@@ -91,7 +91,7 @@ def identify_features_to_analyze(df, unique_min=0, use_llm=False, prompt_prefix=
     elif use_llm and st.session_state["generation_model"]!="":
         model = st.session_state["generation_model"]
         template=""
-        prompt = prompt_prefix+" The following is a summary of the numeric data in the dataframe: \n\n"+str(df[cols].describe(datetime_is_numeric=False).to_json())+ \
+        prompt = prompt_prefix+" The following is a summary of the numeric data in the dataframe: \n\n"+str(df[cols].describe().to_json())+ \
                 "\n\nWhat are features that should be analyzed? Please do not mention any features that should not be analyzed."
         response = generate_responses(prompt, model, template, temperature=0)
         
@@ -142,7 +142,7 @@ def group_as_needed(df_input, grouping):
         df = df.reset_index().set_index(grouping, drop=False)
     return df
 
-def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file_name='data.json', prompt_frac=.45):
+def process_data_to_file(df_input:pd.DataFrame, date_var=None, by_var=None, file_name='data.txt', prompt_frac=.45, header="Data:\n"):
     """Process data and save to various json files for streamlit app."""
     data = df_input.copy()
     # if no group requested try to save the data and if too large, summarize and save
@@ -151,7 +151,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
         num_tokens = num_tokens_from_string(data_json)
         if  num_tokens > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
-            data = data.describe(include='all', datetime_is_numeric=False)
+            data = data.describe(include='all')
             data_json = data.to_json()
             # write streamlit warning that the data only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
@@ -160,7 +160,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
         data_json = group_as_needed(data, grouping=[by_var]).to_json()
         if  num_tokens_from_string(data_json) > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
-            data = df_input.describe(include='all', datetime_is_numeric=False)
+            data = df_input.describe(include='all')
             data_json = data.to_json()
             # write streamlit warning that the data was only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
@@ -169,7 +169,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
         data_json = group_as_needed(data, grouping=[date_var]).to_json()
         if  num_tokens_from_string(data_json) > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
-            data = df_input.describe(include='all', datetime_is_numeric=False)
+            data = df_input.describe(include='all')
             data_json = json.loads(data.to_json())
             # write streamlit warning that the data was only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
@@ -187,6 +187,7 @@ def process_data_to_json(df_input:pd.DataFrame, date_var=None, by_var=None, file
                 st.warning(f"Data was subset to {len(data)} rows to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
         data_json = json.loads(data_json)
     with open('../data/processed/'+file_name, 'w') as json_file:
+        json_file.write(header)
         json.dump(data_json, json_file, indent=4)
 
 
@@ -209,55 +210,57 @@ def generate_responses(prompt, model, template="", temperature=0):
 
 def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
     """Process time series data and save to various json files for streamlit app.
-    - summary_all.json: summary of all columns
-    - summary.json: summary of numeric columns only
-    - head.json: first 7 rows of dataframe
-    - start.json: first 7 days of dataframe
-    - recent.json: last 7 days of dataframe
-    - compare.json: numeric summary comparison by group    
+    - summary_all.txt: summary of all columns
+    - summary.txt: summary of numeric columns only
+    - head.txt: first 7 rows of dataframe
+    - start.txt: first 7 days of dataframe
+    - recent.txt: last 7 days of dataframe
+    - compare.txt: numeric summary comparison by group    
     """
     df = df_input.copy()
 
     # Summarize the dataframe (all and numeric only)
-    data = json.loads(df.describe(include='all', datetime_is_numeric=False).to_json())
+    data = json.loads(df.describe(include='all').to_json())
     # Now, let's write this data to a file
-    with open('../data/processed/summary_all.json', 'w') as json_file:
+    with open('../data/processed/summary_all.txt', 'w') as json_file:
+        json_file.write("Summary of all columns:\n")
         json.dump(data, json_file, indent=4)
 
-    data = json.loads(df.describe(datetime_is_numeric=False).to_json())
+    data = json.loads(df.describe().to_json())
     # Now, let's write this data to a file
-    with open('../data/processed/summary.json', 'w') as json_file:
+    with open('../data/processed/summary.txt', 'w') as json_file:
+        json_file.write("Summary of numeric columns:\n")
         json.dump(data, json_file, indent=4)
 
     use_rows=7
     if len(df.columns)>10:
         use_rows=2
     # keep only the head of dataframe and write json file
-    process_data_to_json(df.head(use_rows), date_var=None, by_var=None, file_name='head.json', prompt_frac=.5*DATA_FRACTION)
+    process_data_to_file(df.head(use_rows), date_var=None, by_var=None, file_name='head.txt', prompt_frac=.5*DATA_FRACTION, header=f"First {use_rows} rows of data:\n")
 
     # keep only the first 7 days in the dataframe and write json file
     data = df[df[date_var] < df[date_var].min() + pd.Timedelta(days=7)].sort_values([date_var])
-    process_data_to_json(data, date_var=date_var, by_var=None, file_name='start.json', prompt_frac=.5*DATA_FRACTION)
+    process_data_to_file(data, date_var=date_var, by_var=None, file_name='start.txt', prompt_frac=.5*DATA_FRACTION, header=f"First 7 days of data:\n")
 
     # keep only the last 7 days in the dataframe and write json file
     data = df[df[date_var] > df[date_var].max() - pd.Timedelta(days=7)].sort_values([date_var])
-    process_data_to_json(data, date_var=date_var, by_var=None, file_name='recent.json', prompt_frac=.5*DATA_FRACTION)
+    process_data_to_file(data, date_var=date_var, by_var=None, file_name='recent.txt', prompt_frac=.5*DATA_FRACTION, header=f"Last 7 days of data:\n")
 
     # if by_var is not None, create a reports by group
     # if we need to only keep a subset of by_var values due to size of data
     if by_var:
         # keep only the first 7 days in the dataframe and write json file
         data = df[df[date_var] < df[date_var].min() + pd.Timedelta(days=7)].sort_values([by_var, date_var])
-        process_data_to_json(data, date_var=date_var, by_var=by_var, file_name='start_by_group.json', prompt_frac=.5*DATA_FRACTION)
+        process_data_to_file(data, date_var=date_var, by_var=by_var, file_name='start_by_group.txt', prompt_frac=.5*DATA_FRACTION, header=f"First 7 days of data by {by_var}:\n")
 
         # keep only the last 7 days in the dataframe and write json file
         data = df[df[date_var] > df[date_var].max() - pd.Timedelta(days=7)]  
-        process_data_to_json(data, date_var=date_var, by_var=by_var, file_name='recent_by_group.json', prompt_frac=.5*DATA_FRACTION)
+        process_data_to_file(data, date_var=date_var, by_var=by_var, file_name='recent_by_group.txt', prompt_frac=.5*DATA_FRACTION, header=f"Last 7 days of data by {by_var}:\n")
 
         group_counts = df[by_var].value_counts()
         group_summaries = ""
         for group_name in group_counts.index:
-            group_summaries = group_summaries + str(group_name)+":\n" + df[df[by_var]==group_name].describe(datetime_is_numeric=False).to_json() + "\n\n"
+            group_summaries = group_summaries + str(group_name)+":\n" + df[df[by_var]==group_name].describe().to_json() + "\n\n"
             # count the length of the prompt
             prompt_len = num_tokens_from_string(group_summaries)
             #if prompt is too long, exit for loop
@@ -266,6 +269,7 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
                 break
         #now let's write the test to a file
         with open('../data/processed/comparison.txt', 'w') as f:
+            f.write("Comparison of numeric data by group:\n")
             f.write(group_summaries)
 
 
