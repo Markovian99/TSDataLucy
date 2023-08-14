@@ -5,14 +5,19 @@ import json
 import tiktoken
 import numpy as np
 
+from langchain.docstore.document import Document
 from langchain.document_loaders import DirectoryLoader
 from langchain.text_splitter import (
 	MarkdownTextSplitter,
 	PythonCodeTextSplitter,
 	RecursiveCharacterTextSplitter)
+from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain.vectorstores.faiss import FAISS
+from langchain.vectorstores.base import VectorStoreRetriever
+from langchain.chains import ConversationalRetrievalChain
+from langchain.llms import OpenAIChat
 
-
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATA_FRACTION, EMBEDDING_MODELS, SOURCE_DOCUMENTS_DIR
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATA_FRACTION, EMBEDDING_MODELS, PROCESSED_DOCUMENTS_DIR, REPORTS_DOCUMENTS_DIR
 
 from bardapi import Bard
 import openai
@@ -27,7 +32,7 @@ if os.getenv('OPENAI_API_TYPE'):
 if os.getenv('OPENAI_API_VERSION'):
     openai.api_version = os.getenv('OPENAI_API_VERSION')
 
-bard = Bard(token=os.getenv('BARD_API_KEY'))
+#bard = Bard(token=os.getenv('BARD_API_KEY'))
 
 
 def initialize_session_state():
@@ -142,9 +147,12 @@ def group_as_needed(df_input, grouping):
         df = df.reset_index().set_index(grouping, drop=False)
     return df
 
-def process_data_to_file(df_input:pd.DataFrame, date_var=None, by_var=None, file_name='data.txt', prompt_frac=.45, header="Data:\n"):
-    """Process data and save to various json files for streamlit app."""
+def process_data_to_file(df_input:pd.DataFrame, date_var=None, by_var=None, file_name='data.txt', prompt_frac=.45, header="Data:\n", date_format='%Y-%m-%d'):
+    """Process data and save to various text files for streamlit app."""
     data = df_input.copy()
+    #now that processing is done, save the date as a string
+    if date_var!=None:
+        data[date_var] = data[date_var].dt.strftime(date_format)
     # if no group requested try to save the data and if too large, summarize and save
     if date_var==None and by_var==None:
         data_json = data.to_json()
@@ -170,7 +178,7 @@ def process_data_to_file(df_input:pd.DataFrame, date_var=None, by_var=None, file
         if  num_tokens_from_string(data_json) > int(prompt_frac*MAX_TOKENS):
             # create a subset of the dateframe to a sample of the by_var
             data = df_input.describe(include='all')
-            data_json = json.loads(data.to_json())
+            data_json = data.to_json()
             # write streamlit warning that the data was only summarized
             st.warning(f"Data was summarized to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
         data_json = json.loads(data_json)
@@ -186,7 +194,7 @@ def process_data_to_file(df_input:pd.DataFrame, date_var=None, by_var=None, file
                 # write streamlit warning that the data was subset
                 st.warning(f"Data was subset to {len(data)} rows to fit within the token limit of {int(prompt_frac*MAX_TOKENS)} tokens.")
         data_json = json.loads(data_json)
-    with open('../data/processed/'+file_name, 'w') as json_file:
+    with open(PROCESSED_DOCUMENTS_DIR+file_name, 'w') as json_file:
         json_file.write(header)
         json.dump(data_json, json_file, indent=4)
 
@@ -222,13 +230,13 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
     # Summarize the dataframe (all and numeric only)
     data = json.loads(df.describe(include='all').to_json())
     # Now, let's write this data to a file
-    with open('../data/processed/summary_all.txt', 'w') as json_file:
+    with open(PROCESSED_DOCUMENTS_DIR+'summary_all.txt', 'w') as json_file:
         json_file.write("Summary of all columns:\n")
         json.dump(data, json_file, indent=4)
 
     data = json.loads(df.describe().to_json())
     # Now, let's write this data to a file
-    with open('../data/processed/summary.txt', 'w') as json_file:
+    with open(PROCESSED_DOCUMENTS_DIR+'summary.txt', 'w') as json_file:
         json_file.write("Summary of numeric columns:\n")
         json.dump(data, json_file, indent=4)
 
@@ -268,9 +276,26 @@ def process_ts_data(df_input:pd.DataFrame, date_var='date', by_var=None):
                 st.warning(f"Comparison data may be subset to fit within the token limit.")
                 break
         #now let's write the test to a file
-        with open('../data/processed/comparison.txt', 'w') as f:
+        with open(PROCESSED_DOCUMENTS_DIR+'comparison.txt', 'w') as f:
             f.write("Comparison of numeric data by group:\n")
             f.write(group_summaries)
+
+
+def split_json_doc_with_header(doc):
+    """Separate header on line one from json doc and split json dict by keys"""
+    try:
+        header = doc.page_content.split("\n")[0]
+        #print(doc.page_content[len(header)+1:])
+        json_dict = json.loads(doc.page_content[len(header)+1:])
+        doc_list = []
+        for key in json_dict.keys():
+            doc_list.append(Document(page_content=header + '\n'+str(json_dict[key]), metadata=doc.metadata))
+        return doc_list
+    except Exception as e:
+        print(e)
+        print("Unable to split " + doc.metadata['source'])
+        return [doc]
+
 
 
 
@@ -278,19 +303,22 @@ def create_knowledge_base(df_input:pd.DataFrame, date_var='date', by_var=None):
     """Create knowledge base for chatbot."""
     process_ts_data(df_input, date_var=date_var, by_var=by_var)
     
+    #load all .txt files in processed_documents directory
+    loader = DirectoryLoader(f"{PROCESSED_DOCUMENTS_DIR}", glob="*.txt")
 
-    loader = DirectoryLoader(f"{SOURCE_DOCUMENTS_DIR}")
-
-    splitter = MarkdownTextSplitter(
-        chunk_size=2000,
-        chunk_overlap=1000,
-    )
-
-    print(f"Loading {SOURCE_DOCUMENTS_DIR}")
-    data = loader.load()
+    print(f"Loading {PROCESSED_DOCUMENTS_DIR}")
+    docs_orig = loader.load()
         
-    print(f"Splitting {len(data)} documents")
-    docs = splitter.split_documents(data)
+    print(f"Splitting {len(docs_orig)} documents")
+    docs = []
+    for doc in docs_orig:
+        print(doc)
+        num_tokens = num_tokens_from_string(doc.page_content)
+        if  num_tokens > int(.1*MAX_TOKENS):
+            doc_list = split_json_doc_with_header(doc)
+            docs.extend(doc_list)
+        else:
+            docs.append(doc)
     
     print(f"Created {len(docs)} documents")
 
@@ -312,3 +340,45 @@ def create_knowledge_base(df_input:pd.DataFrame, date_var='date', by_var=None):
 
     print(f"FAISS VectorDB has {db.index.ntotal} documents")
     
+
+def generate_kb_response(prompt, model, template=None):
+
+    data_dict = {}
+    data_dict['prompt'] = prompt
+    data_dict['chat_history'] = []
+
+    if model.startswith("OpenAI: "):
+        llm = OpenAIChat(model=model[8:], max_tokens=MAX_TOKENS, temperature=TEMPERATURE)
+    else:
+        return "Please select an OpenAI model."
+
+    # Will download the model the first time it runs
+    embedding_function = SentenceTransformerEmbeddings(
+        model_name=EMBEDDING_MODELS[0],
+        cache_folder="../data/sentencetransformers",
+    )
+    db = FAISS.load_local("../data/faiss-db", embedding_function)
+
+    retriever = VectorStoreRetriever(vectorstore=db)
+    chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever) #, return_source_documents=True
+
+    # prompt_template = """
+    # ### System:
+    # {context}
+
+    # ### User:
+    # {question}
+
+    # ### Assistant:
+    # """
+    # PROMPT = PromptTemplate(
+    #     template=prompt_template, input_variables=["context", "question"]
+    # )
+    # chain_type_kwargs = {"prompt": PROMPT}
+    # qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, chain_type_kwargs=chain_type_kwargs)
+    # query = data_dict['prompt']
+    # return qa.run(query)
+    chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever)
+
+    return chain(inputs={'question':data_dict['prompt'], 'chat_history':data_dict['chat_history']})['answer']
+

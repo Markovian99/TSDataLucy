@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME, MEAN_AGG
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME, MEAN_AGG, PROCESSED_DOCUMENTS_DIR, REPORTS_DOCUMENTS_DIR
 from app_utils import (generate_responses, initialize_session_state, identify_categorical, process_ts_data, 
-                       num_tokens_from_string, identify_features_to_analyze, create_knowledge_base)
+                       num_tokens_from_string, identify_features_to_analyze, create_knowledge_base, generate_kb_response)
 
 
 
@@ -122,15 +122,15 @@ def run_report_gererator():
         process_ts_data(dataframe, DATE_VAR, by_var)
 
         # Open the files in read mode into Python dictionary then back to a JSON string
-        with open('../data/processed/head.txt', 'r') as f:
+        with open(PROCESSED_DOCUMENTS_DIR+'head.txt', 'r') as f:
             head_str = f.read()
-        with open('../data/processed/summary_all.txt', 'r') as f:
+        with open(PROCESSED_DOCUMENTS_DIR+'summary_all.txt', 'r') as f:
             summary_all_str = f.read()
-        with open('../data/processed/summary.txt', 'r') as f:
+        with open(PROCESSED_DOCUMENTS_DIR+'summary.txt', 'r') as f:
             summary_str = f.read()
-        with open('../data/processed/start.txt', 'r') as f:
+        with open(PROCESSED_DOCUMENTS_DIR+'start.txt', 'r') as f:
             start_str = f.read()
-        with open('../data/processed/recent.txt', 'r') as f:
+        with open(PROCESSED_DOCUMENTS_DIR+'recent.txt', 'r') as f:
             recent_str = f.read()
 
         prompt_context= general_context + "\n This is an example of the first set of rows \n"+head_str +"\n"+"Please describe what the data fields may represent."
@@ -154,7 +154,7 @@ def run_report_gererator():
         if by_var:
             if data_summary_by_group:
                 # read in the summary data into a string
-                with open('../data/processed/comparison.txt', 'r') as f:
+                with open(PROCESSED_DOCUMENTS_DIR+'comparison.txt', 'r') as f:
                     group_summaries = f.read()           
                 prompt_context = general_context + group_summaries + "Please summarize the data provided by group."
                 data_summary_response = generate_responses(prompt_context, model, template)
@@ -162,7 +162,7 @@ def run_report_gererator():
                 st.write(data_summary_response)
             if compare_by_group:
                 # read in the comparison data into a string
-                with open('../data/processed/comparison.txt', 'r') as f:
+                with open(PROCESSED_DOCUMENTS_DIR+'comparison.txt', 'r') as f:
                     group_summaries = f.read()        
                 prompt_context = general_context + group_summaries + "Please compare the metrics from the different sub-groups to each other."
                 comparison_response = generate_responses(prompt_context, model, template)
@@ -170,9 +170,9 @@ def run_report_gererator():
                 st.write(comparison_response)
             if recent_summary_by_group:
                 # read in the data into a strings
-                with open('../data/processed/start_by_group.txt', 'r') as f:
+                with open(PROCESSED_DOCUMENTS_DIR+'start_by_group.txt', 'r') as f:
                     json_start_by_group = f.read() 
-                with open('../data/processed/recent_by_group.txt', 'r') as f:
+                with open(PROCESSED_DOCUMENTS_DIR+'/recent_by_group.txt', 'r') as f:
                     json_recent_by_group = f.read()     
                 prompt_context = general_context + f"Compare the data from the start period with the most recent period for each {by_var} to provide analysis of the most recent period.\n Start period:\n"+ \
                                 json_start_by_group+"\n Recent period:\n"+json_recent_by_group
@@ -233,8 +233,8 @@ def run_chatbot():
     # Generate a new response if last message is not from assistant
     if st.session_state.messages and st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                response = generate_responses(prompt, model, template) 
+            with st.spinner("Thinking..."):                
+                response = generate_kb_response(prompt, model, template) 
                 st.write(response) 
         message = {"role": "assistant", "content": response}
         st.session_state.messages.append(message)
@@ -254,49 +254,3 @@ def run_chatbot():
         #         # ratings = [None, None, None]
 
         #llm = HuggingFacePipeline(pipeline=pipeline)
-        if model.startswith("OpenAI: "):
-            llm = OpenAI(model=model[8:], max_tokens=MAX_TOKENS, temperature=TEMPERATURE)
-        else:
-            return
-
-        # Will download the model the first time it runs
-        embedding_function = SentenceTransformerEmbeddings(
-            model_name=EMBEDDING_MODELS[0],
-            cache_folder="../data/sentencetransformers",
-        )
-        db = FAISS.load_local("../data/faiss-db", embedding_function)
-
-        retriever = VectorStoreRetriever(vectorstore=db)
-        chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever) #, return_source_documents=True
-
-        response = run_prompt()
-        st.write(response)
-
-
-def run_prompt(kb_prompt=None):
-    data_dict = {}
-    if kb_prompt:
-        data_dict['prompt'] = kb_prompt
-    else:
-        data_dict['prompt'] = "Can you provide a summary of this data?"
-    data_dict['chat_history'] = []
-
-    # prompt_template = """
-    # ### System:
-    # {context}
-
-    # ### User:
-    # {question}
-
-    # ### Assistant:
-    # """
-    # PROMPT = PromptTemplate(
-    #     template=prompt_template, input_variables=["context", "question"]
-    # )
-    # chain_type_kwargs = {"prompt": PROMPT}
-    # qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, chain_type_kwargs=chain_type_kwargs)
-    # query = data_dict['prompt']
-    # return qa.run(query)
-    chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever)
-
-    return chain(inputs={'question':data_dict['prompt'], 'chat_history':data_dict['chat_history']})['answer']

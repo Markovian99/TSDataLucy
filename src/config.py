@@ -13,4 +13,6 @@ APP_NAME = "Time Series Data Analyizer - Lucy"
 # Aggregation defaults to sum unless feature is specified in list here
 MEAN_AGG = []
 
-SOURCE_DOCUMENTS_DIR = "../data/processed/"
+# make sure to include the trailing slash
+PROCESSED_DOCUMENTS_DIR = "../data/processed/"
+REPORTS_DOCUMENTS_DIR = "../data/reports/"
