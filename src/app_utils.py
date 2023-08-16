@@ -4,6 +4,7 @@ import os
 import json
 import tiktoken
 import numpy as np
+import time
 
 from langchain.docstore.document import Document
 from langchain.document_loaders import DirectoryLoader
@@ -210,7 +211,13 @@ def generate_responses(prompt, model, template="", temperature=0):
             this_answer = bard.get_answer(prompt)
             response = this_answer['content']
         elif model.startswith("OpenAI: "):
-            response_full = openai.ChatCompletion.create( model=model[8:],   messages=[{"role": "user", "content": prompt }], temperature=temperature)
+            # try to call openai and if it fails wait 5 seconds and try again
+            try:
+                response_full = openai.Completion.create( model=model[8:],  messages=[{"role": "user", "content": prompt }], temperature=temperature)
+            except:
+                st.warning("OpenAI API call failed. Waiting 5 seconds and trying again.")
+                time.sleep(5)
+                response_full = openai.ChatCompletion.create( model=model[8:],   messages=[{"role": "user", "content": prompt }], temperature=temperature)
             response = response_full['choices'][0]['message']['content']
 
     return response
@@ -289,7 +296,7 @@ def split_json_doc_with_header(doc):
         json_dict = json.loads(doc.page_content[len(header)+1:])
         doc_list = []
         for key in json_dict.keys():
-            doc_list.append(Document(page_content=header + '\n'+str(json_dict[key]), metadata=doc.metadata))
+            doc_list.append(Document(page_content=header+'Data for ' +str(key)+ ':\n'+str(json_dict[key]), metadata=doc.metadata))
         return doc_list
     except Exception as e:
         print(e)
@@ -359,7 +366,7 @@ def generate_kb_response(prompt, model, template=None):
     )
     db = FAISS.load_local("../data/faiss-db", embedding_function)
 
-    retriever = VectorStoreRetriever(vectorstore=db)
+    retriever = VectorStoreRetriever(vectorstore=db, search_kwargs={"k": 6})
     chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever) #, return_source_documents=True
 
     # prompt_template = """
@@ -372,13 +379,12 @@ def generate_kb_response(prompt, model, template=None):
     # ### Assistant:
     # """
     # PROMPT = PromptTemplate(
-    #     template=prompt_template, input_variables=["context", "question"]
+    #     template=prompt_templatjosleee, input_variables=["context", "question"]
     # )
     # chain_type_kwargs = {"prompt": PROMPT}
     # qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, chain_type_kwargs=chain_type_kwargs)
     # query = data_dict['prompt']
     # return qa.run(query)
-    chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever)
 
     return chain(inputs={'question':data_dict['prompt'], 'chat_history':data_dict['chat_history']})['answer']
 

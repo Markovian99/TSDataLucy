@@ -33,3 +33,4 @@ venv
 # mkdocs documentation
 /data/raw
 /data/processed
+/data/reports
