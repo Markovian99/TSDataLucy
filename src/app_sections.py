@@ -115,7 +115,7 @@ def run_report_gererator():
         #subset dataframe based on min and max dates
         dataframe = dataframe[(dataframe[DATE_VAR].dt.date>=st.session_state["d_min"]) & (dataframe[DATE_VAR].dt.date<=st.session_state["d_max"])]
 
-        drop_features = [f for f in st.session_state["numeric_features"] if f not in  st.session_state["selected_features"] and f!=DATE_VAR]
+        drop_features = [f for f in st.session_state["numeric_features"] if f not in  st.session_state["selected_features"] and f!=DATE_VAR and f!=by_var]
         dataframe = dataframe.drop(drop_features, axis=1)
 
         # process time series data to save descriptive information for prompts
