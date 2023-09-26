@@ -36,7 +36,18 @@ def run_upload_and_settings():
             f.write(uploaded_file.getbuffer())
 
         dataframe = pd.read_csv(uploaded_file)
-        dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR], format="%Y-%m-%d")
+
+        # get the date feature
+        all_features=dataframe.columns.tolist()
+        date_index = all_features.index(st.session_state["date_column"])
+        date_column = st.selectbox('What is the primary date column?', all_features, date_index)
+        st.session_state["date_column"]=date_column
+
+        try:        
+            dataframe[st.session_state["date_column"]] = pd.to_datetime(dataframe[st.session_state["date_column"]], format="%Y-%m-%d")
+        except Exception as e:
+            print(e)
+            st.warning("Could not convert date column to datetime format. Please select a different date column.")
 
         if st.session_state["uploaded_file"] != uploaded_file.name:
             st.session_state["categorical_features"]=["None"]+identify_categorical(dataframe)
@@ -55,8 +66,8 @@ def run_upload_and_settings():
                 st.session_state["features_to_mean"]=st.session_state["numeric_features"]
 
         st.session_state["uploaded_file"] = uploaded_file.name
-        st.session_state["start_date"]=dataframe[DATE_VAR].min()
-        st.session_state["end_date"]=dataframe[DATE_VAR].max()
+        st.session_state["start_date"]=dataframe[st.session_state["date_column"]].min()
+        st.session_state["end_date"]=dataframe[st.session_state["date_column"]].max()
         st.write(dataframe)
 
     if uploaded_file is not None:    
@@ -123,15 +134,15 @@ def run_report_gererator():
 
     if generate_button:
         dataframe = pd.read_csv(os.path.join("../data/raw/"+st.session_state["uploaded_file"]))
-        dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR])
+        dataframe[st.session_state["date_column"]] = pd.to_datetime(dataframe[st.session_state["date_column"]])
         #subset dataframe based on min and max dates
-        dataframe = dataframe[(dataframe[DATE_VAR].dt.date>=st.session_state["d_min"]) & (dataframe[DATE_VAR].dt.date<=st.session_state["d_max"])]
+        dataframe = dataframe[(dataframe[st.session_state["date_column"]].dt.date>=st.session_state["d_min"]) & (dataframe[st.session_state["date_column"]].dt.date<=st.session_state["d_max"])]
 
-        drop_features = [f for f in st.session_state["numeric_features"] if (f not in  st.session_state["selected_features_sum"]+ st.session_state["selected_features_mean"]) and f!=DATE_VAR and f!=by_var]
+        drop_features = [f for f in st.session_state["numeric_features"] if (f not in  st.session_state["selected_features_sum"]+ st.session_state["selected_features_mean"]) and f!=st.session_state["date_column"] and f!=by_var]
         dataframe = dataframe.drop(drop_features, axis=1)
 
         # process time series data to save descriptive information for prompts
-        process_ts_data(dataframe, DATE_VAR, by_var)
+        process_ts_data(dataframe, st.session_state["date_column"], by_var)
 
         # Open the files in read mode into Python dictionary then back to a JSON string
         with open(PROCESSED_DOCUMENTS_DIR+'head.txt', 'r') as f:
@@ -217,15 +228,15 @@ def run_chatbot():
 
     if start_button:
         dataframe = pd.read_csv(os.path.join("../data/raw/"+st.session_state["uploaded_file"]))
-        dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR])
+        dataframe[st.session_state["date_column"]] = pd.to_datetime(dataframe[st.session_state["date_column"]])
         #subset dataframe based on min and max dates
-        dataframe = dataframe[(dataframe[DATE_VAR].dt.date>=st.session_state["d_min"]) & (dataframe[DATE_VAR].dt.date<=st.session_state["d_max"])]
+        dataframe = dataframe[(dataframe[st.session_state["date_column"]].dt.date>=st.session_state["d_min"]) & (dataframe[st.session_state["date_column"]].dt.date<=st.session_state["d_max"])]
 
-        drop_features = [f for f in st.session_state["numeric_features"] if (f not in  st.session_state["selected_features_sum"]+ st.session_state["selected_features_mean"]) and f!=DATE_VAR]
+        drop_features = [f for f in st.session_state["numeric_features"] if (f not in  st.session_state["selected_features_sum"]+ st.session_state["selected_features_mean"]) and f!=st.session_state["date_column"]]
         dataframe = dataframe.drop(drop_features, axis=1)
 
         # process time series data to save to knowledge base
-        create_knowledge_base(dataframe, DATE_VAR, by_var)
+        create_knowledge_base(dataframe, st.session_state["date_column"], by_var)
     
     # Store LLM generated responses
     if "messages" not in st.session_state.keys():
