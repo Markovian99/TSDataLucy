@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME, MEAN_AGG
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME
 from app_utils import generate_responses, initialize_session_state, identify_categorical, process_ts_data, num_tokens_from_string, identify_features_to_analyze
 from app_sections import run_upload_and_settings, run_report_gererator, run_chatbot
 

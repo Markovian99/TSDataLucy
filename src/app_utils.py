@@ -18,7 +18,7 @@ from langchain.vectorstores.base import VectorStoreRetriever
 from langchain.chains import ConversationalRetrievalChain
 from langchain.llms import OpenAIChat
 
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATA_FRACTION, EMBEDDING_MODELS, PROCESSED_DOCUMENTS_DIR, REPORTS_DOCUMENTS_DIR
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATA_FRACTION, EMBEDDING_MODELS, PROCESSED_DOCUMENTS_DIR, REPORTS_DOCUMENTS_DIR, DATE_VAR
 
 from bardapi import Bard
 import openai
@@ -42,10 +42,13 @@ def initialize_session_state():
         "cleared_responses" : False,
         "generated_responses" : False,
         "chat_history": [],
+        "date_column": DATE_VAR,
         "categorical_features": [],
         "numeric_features": [],
-        "features_to_analyze": [],      
-        "selected_features": [],  
+        "features_to_sum": [],      
+        "features_to_mean": [],  
+        "selected_features_sum": [],  
+        "selected_features_mean": [],
         "start_date": None,
         "end_date": None,
         "d_min": None,
@@ -85,12 +88,19 @@ def identify_categorical(df, unique_threshold=100, max_portion=0.1):
 def identify_features_to_analyze(df, unique_min=0, use_llm=False, prompt_prefix=""):
     """Identify possible features_to_analyze in a dataframe."""
     cols = []
+    sum_cols = []
+    mean_cols = []
 
     # select all numeric columns
     numeric_cols =  df.select_dtypes('number').columns.to_list()
     for col in numeric_cols:
         if df[col].nunique() > unique_min:
-            cols.append(col)
+            if df[col].max()*df[col].min() < 0:
+                cols.append(col)
+                sum_cols.append(col)
+            else:
+                cols.append(col)
+                mean_cols.append(col)
 
     if len(cols)==0:
         st.warning("No numeric columns appropriate for analyzing were found in data.")
@@ -98,13 +108,17 @@ def identify_features_to_analyze(df, unique_min=0, use_llm=False, prompt_prefix=
         model = st.session_state["generation_model"]
         template=""
         prompt = prompt_prefix+" The following is a summary of the numeric data in the dataframe: \n\n"+str(df[cols].describe().to_json())+ \
-                "\n\nWhat are features that should be analyzed? Please do not mention any features that should not be analyzed."
+                "\n\nWhat are features that should be analyzed and aggregated by summing? What are features that should be analyzed and aggregated by taking the mean? Please do not mention any features that should not be analyzed and respond in the following format: \n\n" + \
+                "sum: feature1, feature2, feature3 \nmean: feature4, feature5, feature6"
         response = generate_responses(prompt, model, template, temperature=0)
+
+        print(response)
         
         # check which columns are in the response which is a string
-        cols = [col for col in cols if col.lower() in response.lower()]
+        sum_cols = [col for col in cols if col.lower() in response.lower()[:response.index("mean:")]]
+        mean_cols = [col for col in cols if col.lower() in response.lower()[response.index("mean:"):]]
 
-    return cols
+    return sum_cols, mean_cols
 
 def mode(x):
     # Check for missing values and empty groups
@@ -131,20 +145,25 @@ def group_as_needed(df_input, grouping):
     numeric_cols =  df.select_dtypes(include=['int16', 'int32', 'int64', 'float16', 'float32', 'float64']).columns.to_list()    
     numeric_cols = [col for col in numeric_cols if df[col].isnull().sum()<len(df[col]) and col not in grouping]
     object_cols = df.select_dtypes(include=['object']).columns.to_list()
-    object_cols = [col for col in object_cols if df[col].isnull().sum()<len(df[col]) and col not in grouping]
+    object_cols = [col for col in object_cols if df[col].isnull().sum()<len(df[col]) and col not in grouping and col!=st.session_state["date_column"]]
+
+    # check which numeric columns to sum and which to mean
+    sum_cols = list(set(numeric_cols).intersection(set(st.session_state["selected_features_sum"])))
+    mean_cols = list(set(numeric_cols).intersection(set(st.session_state["selected_features_mean"])))
 
     if len(df[grouping].groupby(grouping).size())==len(df):
         #set index as grouping sorted for json file
         df.set_index(grouping, inplace=True, drop=False)
     else:
-        # use pandas groupby to aggregate. For objects use the mode and add postfix "mode", for numeric use the sum
-        df_num = df[list(set(numeric_cols+grouping))].groupby(grouping).sum()
+        # use pandas groupby to aggregate. For objects use the mode and add postfix "mode", for numeric use the sum or mean
+        df_num_sum = df[list(set(sum_cols+grouping))].groupby(grouping).sum()
+        df_num_mean = df[list(set(mean_cols+grouping))].groupby(grouping).mean()
         if len(object_cols)>0:
             df_obj = df[list(set(object_cols+grouping))].groupby(grouping).agg(lambda x:x.mode())
             df_obj.columns = [f"{col}_mode" for col in df_obj.columns]
-            df = pd.concat([df_num, df_obj], axis=1)
+            df = pd.concat([df_num_sum,df_num_mean, df_obj], axis=1)
         else:
-            df = df_num
+            df = pd.concat([df_num_sum,df_num_mean], axis=1)
         df = df.reset_index().set_index(grouping, drop=False)
     return df
 
@@ -355,7 +374,7 @@ def generate_kb_response(prompt, model, template=None):
     data_dict['chat_history'] = []
 
     if model.startswith("OpenAI: "):
-        llm = OpenAIChat(model=model[8:], max_tokens=MAX_TOKENS, temperature=TEMPERATURE)
+        llm = OpenAIChat(model=model[8:], max_tokens=2000, temperature=TEMPERATURE)
     else:
         return "Please select an OpenAI model."
 
@@ -367,7 +386,7 @@ def generate_kb_response(prompt, model, template=None):
     db = FAISS.load_local("../data/faiss-db", embedding_function)
 
     retriever = VectorStoreRetriever(vectorstore=db, search_kwargs={"k": 6})
-    chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever) #, return_source_documents=True
+    chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever, return_source_documents=True) #, return_source_documents=True
 
     # prompt_template = """
     # ### System:
@@ -385,6 +404,10 @@ def generate_kb_response(prompt, model, template=None):
     # qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, chain_type_kwargs=chain_type_kwargs)
     # query = data_dict['prompt']
     # return qa.run(query)
+    response = chain(inputs={'question':data_dict['prompt'], 'chat_history':data_dict['chat_history']})
+    for doc in response['source_documents']:
+        print(doc)
+        print("\n")
 
-    return chain(inputs={'question':data_dict['prompt'], 'chat_history':data_dict['chat_history']})['answer']
+    return response['answer']
 

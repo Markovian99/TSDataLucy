@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME, MEAN_AGG, PROCESSED_DOCUMENTS_DIR, REPORTS_DOCUMENTS_DIR
+from config import MODELS, TEMPERATURE, MAX_TOKENS, DATE_VAR, DATA_FRACTION, APP_NAME, PROCESSED_DOCUMENTS_DIR, REPORTS_DOCUMENTS_DIR
 from app_utils import (generate_responses, initialize_session_state, identify_categorical, process_ts_data, 
                        num_tokens_from_string, identify_features_to_analyze, create_knowledge_base, generate_kb_response)
 
@@ -35,20 +35,26 @@ def run_upload_and_settings():
         with open(os.path.join("../data/raw/",uploaded_file.name),"wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        st.session_state["uploaded_file"] = uploaded_file.name
         dataframe = pd.read_csv(uploaded_file)
         dataframe[DATE_VAR] = pd.to_datetime(dataframe[DATE_VAR], format="%Y-%m-%d")
-        st.session_state["categorical_features"]=["None"]+identify_categorical(dataframe)
-        if st.session_state["numeric_features"]==[]:
-            st.session_state["numeric_features"]=identify_features_to_analyze(dataframe)
+
+        if st.session_state["uploaded_file"] != uploaded_file.name:
+            st.session_state["categorical_features"]=["None"]+identify_categorical(dataframe)
+            sum_cols, mean_cols=identify_features_to_analyze(dataframe)
+            st.session_state["numeric_features"]=sum_cols+mean_cols
             try:
                 # use genai to create the default list of features to analyze
-                st.session_state["features_to_analyze"]=identify_features_to_analyze(dataframe,use_llm=True,prompt_prefix=general_context)
+                sum_cols, mean_cols=identify_features_to_analyze(dataframe,use_llm=True,prompt_prefix=general_context)
+                st.session_state["features_to_sum"]=sum_cols
+                st.session_state["features_to_mean"]=mean_cols
                 print("Features to analyze: ")
-                print(st.session_state["features_to_analyze"])
+                print(sum_cols+mean_cols)
             except Exception as e:
                 print(e)
-                st.session_state["features_to_analyze"]=st.session_state["numeric_features"]
+                st.session_state["features_to_sum"]=st.session_state["numeric_features"]
+                st.session_state["features_to_mean"]=st.session_state["numeric_features"]
+
+        st.session_state["uploaded_file"] = uploaded_file.name
         st.session_state["start_date"]=dataframe[DATE_VAR].min()
         st.session_state["end_date"]=dataframe[DATE_VAR].max()
         st.write(dataframe)
@@ -62,8 +68,14 @@ def run_upload_and_settings():
             d_max = st.date_input("Analysis End Date", value=st.session_state["end_date"], min_value=st.session_state["start_date"], max_value=st.session_state["end_date"])
             st.session_state["d_max"]=d_max
 
-        selected_features = st.multiselect('What are the metrics / features to analyze?', st.session_state["numeric_features"], default=st.session_state["features_to_analyze"])
-        st.session_state["selected_features"]=selected_features
+        selected_features_sum = st.multiselect('What are the features to analyze and aggregate by summing?', st.session_state["numeric_features"], default=st.session_state["features_to_sum"])
+        st.session_state["selected_features_sum"]=selected_features_sum
+        selected_features_mean = st.multiselect('What are the features to analyze and aggregate by taking the mean?', st.session_state["numeric_features"], default=st.session_state["features_to_mean"])
+        st.session_state["selected_features_mean"]=selected_features_mean
+
+        #check if mean and sum features overlap
+        if len(set(selected_features_sum).intersection(set(selected_features_mean)))>0:
+            st.warning("The features to sum and mean overlap. Please select different features.")
         
 
         # streamlit header    
@@ -115,7 +127,7 @@ def run_report_gererator():
         #subset dataframe based on min and max dates
         dataframe = dataframe[(dataframe[DATE_VAR].dt.date>=st.session_state["d_min"]) & (dataframe[DATE_VAR].dt.date<=st.session_state["d_max"])]
 
-        drop_features = [f for f in st.session_state["numeric_features"] if f not in  st.session_state["selected_features"] and f!=DATE_VAR and f!=by_var]
+        drop_features = [f for f in st.session_state["numeric_features"] if (f not in  st.session_state["selected_features_sum"]+ st.session_state["selected_features_mean"]) and f!=DATE_VAR and f!=by_var]
         dataframe = dataframe.drop(drop_features, axis=1)
 
         # process time series data to save descriptive information for prompts
@@ -209,7 +221,7 @@ def run_chatbot():
         #subset dataframe based on min and max dates
         dataframe = dataframe[(dataframe[DATE_VAR].dt.date>=st.session_state["d_min"]) & (dataframe[DATE_VAR].dt.date<=st.session_state["d_max"])]
 
-        drop_features = [f for f in st.session_state["numeric_features"] if f not in  st.session_state["selected_features"] and f!=DATE_VAR]
+        drop_features = [f for f in st.session_state["numeric_features"] if (f not in  st.session_state["selected_features_sum"]+ st.session_state["selected_features_mean"]) and f!=DATE_VAR]
         dataframe = dataframe.drop(drop_features, axis=1)
 
         # process time series data to save to knowledge base
